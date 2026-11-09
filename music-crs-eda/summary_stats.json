@@ -1,0 +1,102 @@
+{
+  "total_sessions": 16199,
+  "train_sessions": 15199,
+  "test_sessions": 1000,
+  "unique_users_sessions": 8720,
+  "total_catalog_tracks": 47071,
+  "total_catalog_users": 8772,
+  "turns_summary": {
+    "min": 24,
+    "max": 24,
+    "mean": 24.0,
+    "median": 24.0,
+    "std": 0.0
+  },
+  "goal_categories": {
+    "H": 2330,
+    "B": 2291,
+    "K": 2116,
+    "J": 1573,
+    "G": 1436,
+    "E": 1395,
+    "D": 1290,
+    "F": 1182,
+    "A": 1145,
+    "C": 1036,
+    "I": 405
+  },
+  "goal_specificity": {
+    "LH": 5491,
+    "HL": 5092,
+    "LL": 3820,
+    "HH": 1796
+  },
+  "age_groups": {
+    "20s": 9072,
+    "10s": 4532,
+    "30s": 2086,
+    "40s": 380,
+    "50s": 94,
+    "60+": 35
+  },
+  "top_countries": {
+    "United States": 2839,
+    "Brazil": 2567,
+    "Poland": 1480,
+    "United Kingdom": 1036,
+    "Germany": 836,
+    "Russia": 769,
+    "Australia": 501,
+    "Netherlands": 416,
+    "Finland": 344,
+    "Mexico": 338
+  },
+  "top_musical_cultures": {
+    "Western": 1032,
+    "American": 627,
+    "Anglo-American": 433,
+    "North American": 350,
+    "Western Pop Culture": 297,
+    "Alternative Rock Culture": 261,
+    "American Hip-Hop": 244,
+    "American Pop Culture": 220,
+    "Western Rock Culture": 206,
+    "American Rock Culture": 197
+  },
+  "top_tags": {
+    "Rock": 18984,
+    "rock": 17171,
+    "alternative": 11781,
+    "Alternative": 11742,
+    "pop": 11279,
+    "Pop": 10342,
+    "favorites": 8825,
+    "alternative rock": 8464,
+    "american": 8140,
+    "indie": 8035,
+    "awesome": 7312,
+    "love": 7263,
+    "seen live": 6321,
+    "electronic": 6294,
+    "metal": 6265,
+    "beautiful": 6106,
+    "00s": 5776,
+    "hard rock": 5740,
+    "male vocalists": 5725,
+    "Metal": 5288
+  },
+  "track_popularity": {
+    "mean": 35.83684221707633,
+    "median": 38.0,
+    "std": 20.63459802913104,
+    "min": 0.0,
+    "max": 93.0
+  },
+  "user_word_count_mean": 44.4260911167356,
+  "agent_word_count_mean": 37.0741789616643,
+  "agent_thought_percentage": 0.0,
+  "progress_assessments": {
+    "MOVES_TOWARD_GOAL": 60069,
+    "DOES_NOT_MOVE_TOWARD_GOAL": 53324
+  }
+}
