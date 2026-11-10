@@ -10,7 +10,19 @@ __pycache__/
 *.py[cod]
 *$py.class
 .venv/
+.venv-stable/
 venv/
 env/
 .ipynb_checkpoints/
 .DS_Store
+
+# Local credentials, indexes and test caches
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+agentic_system/.cache/
+agentic_system/.runtime/
