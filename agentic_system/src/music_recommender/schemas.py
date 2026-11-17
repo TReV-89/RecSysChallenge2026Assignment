@@ -37,7 +37,7 @@ class RecommendationRequest(StrictModel):
     excluded_track_ids: list[str] = Field(default_factory=list)
     weights: SimilarityWeights = Field(default_factory=SimilarityWeights)
     query_weight: float = Field(default=0.75, ge=0, le=1)
-    limit: int = Field(default=5, ge=1, le=10)
+    limit: int = Field(default=5, ge=1, le=20)
 
 
 class Neighbor(StrictModel):
@@ -92,7 +92,7 @@ class RecommendationResponse(StrictModel):
     recommendations: list[Recommendation]
     neighbors: list[Neighbor]
     notices: list[str]
-    mode: Literal["groq", "local", "fallback"]
+    mode: Literal["groq", "openrouter", "local", "fallback"]
 
 
 class SearchArguments(StrictModel):

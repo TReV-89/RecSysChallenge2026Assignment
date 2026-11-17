@@ -1,5 +1,3 @@
-from langchain_core.tools import tool
-
 from .embeddings import cosine01
 from .schemas import (
     Candidate,
@@ -7,32 +5,13 @@ from .schemas import (
     RankedTrack,
     RecommendationRequest,
     RetrievalResult,
-    SimilarityWeights,
     SupportingUser,
     Track,
 )
-
-
-def weighted_similarity(profile, goal, specificity, weights: SimilarityWeights) -> float:
-    pairs = [(profile, weights.profile), (goal, weights.goal), (specificity, weights.specificity)]
-    denominator = sum(weight for score, weight in pairs if score is not None)
-    if denominator == 0:
-        return 0.0
-    return sum(score * weight for score, weight in pairs if score is not None) / denominator
-
-
-@tool
-def calculate_user_similarity(
-    profile_score: float | None,
-    goal_score: float | None,
-    specificity_score: float | None,
-    weights: SimilarityWeights,
-) -> float:
-    """Combine profile, goal and specificity similarities; renormalize missing components."""
-    for value in (profile_score, goal_score, specificity_score):
-        if value is not None and not 0 <= value <= 1:
-            raise ValueError("Similarity components must be between zero and one.")
-    return weighted_similarity(profile_score, goal_score, specificity_score, weights)
+from .tools.calculate_user_similarity import (
+    calculate_user_similarity,
+    weighted_similarity,  # noqa: F401 - compatibility export
+)
 
 
 def as_list(value) -> list[str]:

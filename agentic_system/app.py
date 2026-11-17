@@ -1,12 +1,10 @@
 """Run with: python -m streamlit run app.py"""
 
-import os
-
 import streamlit as st
 
+from music_recommender.agent import build_agent, create_llm
 from music_recommender.config import Settings
 from music_recommender.embeddings import LocalEmbedder
-from music_recommender.graph import build_graph, create_llm
 from music_recommender.retrieval import Retriever
 from music_recommender.schemas import (
     ChatTurn,
@@ -75,14 +73,26 @@ with st.sidebar:
     st.header("Your listening session")
     catalog = st.selectbox("Catalog", ["Full catalog", "Sample catalog"])
     settings.data_dir /= "catalog" if catalog == "Full catalog" else "sample"
-    local_only = st.checkbox(
-        "Local retrieval only (no API calls)", value=not bool(os.getenv("GROQ_API_KEY"))
+    settings.llm_provider = st.selectbox(
+        "Inference provider",
+        ["openrouter", "groq"],
+        index=0 if settings.llm_provider == "openrouter" else 1,
     )
-    api_key = os.getenv("GROQ_API_KEY", "")
+    provider_label = "OpenRouter" if settings.llm_provider == "openrouter" else "Groq"
+    local_only = st.checkbox(
+        "Local retrieval only (no API calls)", value=not bool(settings.api_key())
+    )
+    api_key = settings.api_key()
     if not local_only:
-        api_key = st.text_input("Groq API key", value=api_key, type="password")
-        settings.groq_model = st.text_input("Groq model", settings.groq_model)
-        st.caption("Free-plan quotas apply to your Groq account. No automatic model switching.")
+        api_key = st.text_input(f"{provider_label} API key", value=api_key, type="password")
+        chosen_model = st.text_input(f"{provider_label} model", settings.model_name)
+        if settings.llm_provider == "openrouter":
+            settings.openrouter_model = chosen_model
+        else:
+            settings.groq_model = chosen_model
+        st.caption(
+            f"Provider quotas apply to your {provider_label} account. No automatic model switching."
+        )
 
 if not (settings.data_dir / "catalog.sqlite3").exists():
     st.info(
@@ -170,7 +180,7 @@ if prompt := st.chat_input("Try: mellow instrumental music for a rainy evening")
         st.error("Choose at least one nonzero similarity weight.")
         st.stop()
     if not local_only and not api_key:
-        st.error("Enter your Groq key or select local retrieval mode.")
+        st.error(f"Enter your {provider_label} key or select local retrieval mode.")
         st.stop()
     request = RecommendationRequest(
         message=prompt,
@@ -195,7 +205,7 @@ if prompt := st.chat_input("Try: mellow instrumental music for a rainy evening")
             embedder = get_embedder(settings.embedding_model, settings.embedding_device)
             retriever = Retriever(settings, store, embedder)
             llm = None if local_only else create_llm(settings, api_key)
-            result = build_graph(settings, retriever, llm).invoke(
+            result = build_agent(settings, retriever, llm).invoke(
                 {"request": request, "notices": []}
             )
             response = result["response"]

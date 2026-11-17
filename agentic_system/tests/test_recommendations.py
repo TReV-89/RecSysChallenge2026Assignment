@@ -2,9 +2,9 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from music_recommender.agent import build_agent, validate_explanations
 from music_recommender.config import Settings
 from music_recommender.embeddings import cosine01, validate_vector
-from music_recommender.graph import build_graph, validate_explanations
 from music_recommender.ingest import ingest, session_record
 from music_recommender.retrieval import Retriever, rank_candidates, weighted_similarity
 from music_recommender.schemas import (
@@ -193,7 +193,7 @@ def test_ranker_and_explainer_reject_invented_ids_and_tags():
 
 def test_local_graph_runs_end_to_end(catalog):
     settings, store, *_ = catalog
-    graph = build_graph(settings, Retriever(settings, store, FakeEmbedder()))
+    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()))
     response = graph.invoke({"request": RecommendationRequest(message="ambient"), "notices": []})[
         "response"
     ]
@@ -216,7 +216,7 @@ class UnavailableLLM:
 
 def test_provider_failure_returns_labeled_local_fallback(catalog):
     settings, store, *_ = catalog
-    graph = build_graph(settings, Retriever(settings, store, FakeEmbedder()), UnavailableLLM())
+    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()), UnavailableLLM())
     response = graph.invoke({"request": RecommendationRequest(message="ambient"), "notices": []})[
         "response"
     ]
@@ -233,7 +233,7 @@ class ScriptedLLM:
         from langchain_core.messages import AIMessage
         from langchain_core.runnables import RunnableLambda
 
-        assert len(tools) == 1
+        assert {tool.name for tool in tools} == {"retrieve_candidates", "rank_tracks"}
         self.calls.append(tool_choice)
         args = (
             {"query": "ambient"}
@@ -277,10 +277,10 @@ class ScriptedLLM:
         )
 
 
-def test_three_agent_tool_and_structured_output_path(catalog):
+def test_main_agent_tool_and_structured_output_path(catalog):
     settings, store, *_ = catalog
     llm = ScriptedLLM()
-    graph = build_graph(settings, Retriever(settings, store, FakeEmbedder()), llm)
+    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()), llm)
     response = graph.invoke({"request": RecommendationRequest(message="ambient"), "notices": []})[
         "response"
     ]

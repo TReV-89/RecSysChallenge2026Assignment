@@ -1,9 +1,18 @@
 # TalkPlay music recommendation prototype
 
 Streamlit chat backed by Chroma, local Qwen embeddings, LangGraph, LangChain tools,
-Pydantic and Groq. The default inference model is `openai/gpt-oss-20b`, which Groq
+Pydantic and Groq or OpenRouter. The default Groq model is `openai/gpt-oss-20b`, which Groq
 lists on its free plan. Free usage requires a Groq account/key and is subject to
 account quotas. The application does not upgrade plans or switch models automatically.
+
+OpenRouter supports `nvidia/nemotron-3-ultra-550b-a55b:free`. Configure
+`OPEN_ROUTER_API_KEY` and `OPEN_ROUTER_MODEL` in `.env` (`OPENROUTER_API_KEY` and
+`OPENROUTER_MODEL` are also accepted). A blank model selects that Nemotron model.
+The app defaults to Groq for recommendations. OpenRouter credentials do not change
+that default; they are used separately for the Nemotron judge. Set `LLM_PROVIDER`
+explicitly only to change the recommendation provider. The sidebar can also select a provider.
+OpenRouter explanations use `function_calling` plus Pydantic validation because
+this model advertises tool calling, not JSON-schema response formatting.
 
 ## Setup (PowerShell)
 
@@ -79,37 +88,58 @@ preserved without depending on Chroma metadata serialization.
 
 Only training profile/goal context is indexed. Conversation responses, hidden
 `thought` fields, progress assessments and test conversations are not indexed.
-This is an interactive prototype, not a challenge evaluation harness: selecting a
-training session preloads its supplied goal, which must not be assumed available
-at an arbitrary turn in a future evaluation protocol.
+In the interactive app, selecting a training session preloads its supplied goal.
+The separate test evaluation runner omits conversation goals and specificity to
+avoid disclosing information unavailable at the current conversation turn.
 
-## Three agents
+## Main agent and tools
 
 ```mermaid
 flowchart LR
-    Chat[Streamlit chat and session context] --> Retrieve[Retrieval agent]
-    Retrieve --> Search[Chroma retrieval and weighted user similarity tools]
-    Search --> Rank[Ranking agent]
-    Rank --> Scores[Deterministic scoring and artist diversity]
-    Scores --> Explain[Explanation agent]
+    Chat[Streamlit chat and session context] --> Agent[Main agent in agent.py]
+    Agent --> Retrieve[retrieve_candidates tool]
+    Retrieve --> Similarity[calculate_user_similarity tool]
+    Retrieve --> Rank[rank_tracks tool]
+    Rank --> Explain[Validated explanation step]
     Explain --> Output[Pydantic recommendation response]
 ```
 
-1. **Retrieval agent:** one Groq tool call constructs the current music query using
+`src/music_recommender/agent.py` owns `MAIN_AGENT_PROMPT` and
+`build_agent(settings, retriever, llm=None, *, prompt=MAIN_AGENT_PROMPT)`. It builds
+the tool list through `tools.build_tools(retriever)` and binds that list to the
+model. One agent follows three bounded LangGraph steps: retrieve, rank, explain.
+The graph forces the appropriate tool at each step, preserving the bounded request
+budget. It uses an explicit `StateGraph`, rather than a free-running ReAct loop.
+
+Each tool lives in its own module under `src/music_recommender/tools/`:
+
+- `retrieve_candidates.py`: catalog search and similar listener evidence.
+- `rank_tracks.py`: deterministic ranking, exclusions and artist diversity.
+- `calculate_user_similarity.py`: weighted similarity, called internally by retrieval.
+
+The decorated functions' docstrings describe their purpose, inputs, return fields,
+empty results and relevant constraints. LangChain exposes these descriptions to
+the model. Request and retrieval arguments use `InjectedToolArg`: Python supplies
+them at execution time, and they are excluded from the model-facing input schemas.
+The model selects only the search query and candidate IDs to exclude. Full typed
+results remain in graph state; only bounded catalog evidence is sent to Groq.
+`graph.py` retains compatibility imports for existing callers.
+
+1. **Retrieval step:** one Groq tool call constructs the current music query using
    recent conversation. The retrieval tool finds tracks and training sessions;
    `calculate_user_similarity` combines the three components. The current user is
    excluded and only the best matching session per other user is kept.
-2. **Ranking agent:** one tool call can exclude candidate IDs that clearly conflict
+2. **Ranking step:** one tool call can exclude candidate IDs that clearly conflict
    with explicit preferences. Python computes the score and stable order, limits
    any primary artist to two tracks, and ranks the supporting users by their weighted
    track affinity. The agent cannot invent candidates or numerical scores.
-3. **Explanation agent:** a separate structured-output request explains the selected
+3. **Explanation step:** a separate structured-output request explains the selected
    tracks. Pydantic validates the output, and application checks enforce exact track
    IDs, no duplicates, and catalog-backed cited tags. Titles/artists always come from
    metadata. Free-text explanations still require evaluation for semantic accuracy.
 
-Tool calling and JSON Schema output are separate requests. Maximum three Groq
-requests per turn, zero automatic retries, and bounded candidate/history context
+Tool calling and JSON Schema output are separate requests. Maximum four provider
+requests per turn, including one explanation-validation correction; zero transport retries, and bounded candidate/history context
 limit inference cost. Provider/schema failures produce visibly labeled local
 fallbacks. A rate-limited account can still use local retrieval. Temperature zero
 and structured outputs do not promise identical LLM decisions across runs.
@@ -147,6 +177,102 @@ Conversation history is scoped to the browser session. Changing the selected
 profile/catalog or pressing **Start a new conversation** resets it. The app can
 exclude previous suggestions. It does not persist chat across server restarts.
 
+## Test-set evaluation
+
+The evaluation runner uses the `test` split of
+`talkpl-ai/TalkPlayData-Challenge-Dataset` (the public development set, not the
+hidden blind sets). It saves predictions in the
+[official evaluator's format](https://github.com/nlp4musa/music-crs-evaluator).
+
+Start with 100 uniformly sampled sessions, keeping all eight turns per session:
+
+```powershell
+.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate --sessions 100 --seed 42 --mode groq --output data/evaluations/groq-test-100
+```
+
+For an explicitly requested OpenRouter recommendation experiment (not the default Groq recommender), use:
+
+```powershell
+.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate --sessions 100 --seed 42 --mode openrouter --output data/evaluations/openrouter-nemotron-test-100
+```
+
+The CLI's `--mode` selects the provider explicitly. Free OpenRouter models are checked
+against the account's `free_model_daily_requests` allowance before each turn. If fewer
+than four requests remain, execution stops and preserves its checkpoint. Run the
+same command after the allowance resets to resume. `allowance.json` records the most
+recent daily counter; `run_status.json` records completion progress. No paid model
+substitution or credit purchase is performed. See [OpenRouter limits](https://openrouter.ai/docs/api/reference/limits).
+
+Use `--sessions 300` for a larger sample, or `--sessions 0` for all 1,000 sessions,
+with a different output directory. Sample selection is deterministic and independent
+of dataset row order. Ten sessions is a smoke test, not a dependable quality estimate.
+One hundred sessions means 800 predictions and up to 3,200 provider requests (including correction attempts); the full
+split means up to 32,000 requests (including correction attempts). `--delay SECONDS` spaces turns if needed.
+`--mode local` explicitly evaluates retrieval with template explanations instead.
+Use distinct output directories for different modes, samples and model versions.
+
+Each turn receives the current user message, available profile and earlier recorded
+dialogue (teacher-forced history). Earlier played IDs are included with prior
+assistant messages. The existing agent retains its usual bounded history window.
+The current target, current/future assistant response, hidden `thought` fields,
+progress assessments, conversation goal and specificity never reach the agent or
+judge. Previous suggestions are not automatically excluded because repeated targets
+are valid. Test sessions are not ingested into the training neighbor index.
+
+The evaluation requests up to 20 tracks and raises the response token budget to
+4,096 for their explanations. Existing numerical ranking and artist diversity still
+apply, so fewer than 20 tracks may be returned. The generated response concatenates
+the returned titles, artists and explanations, as in the app's conversation summary.
+
+Metrics follow the public evaluator:
+
+- nDCG@1, @10 and @20: one relevant track, `1 / log2(rank + 1)` if within the cutoff,
+  otherwise zero. Average across sessions within each turn, then across eight turns.
+- Catalog diversity: distinct recommended IDs divided by the **full official
+  metadata catalog**, including tracks missing from our searchable index.
+- Lexical diversity: corpus-level Distinct-2, using lowercase whitespace tokens
+  with punctuation preserved and no bigrams across response boundaries.
+- Nemotron judge via OpenRouter: personalization and explanation-quality integer scores
+  from 1 to 5, equally averaged and normalized with `(score - 1) / 4`.
+
+The official judge prompt is private. `llm_judge_proxy` and `composite_proxy` are
+explicitly unofficial. With `--no-judge`, both remain `null`; the runner reports
+the weighted non-judge subtotal out of **0.70** without reweighting it to 1.0.
+The proxy composite uses `0.50*nDCG@20 + 0.10*catalog + 0.10*Distinct-2 + 0.30*judge`.
+The score normalization and equal dimension weights are disclosed local assumptions.
+
+To judge already generated Groq responses, configure `OPEN_ROUTER_API_KEY` and
+`OPEN_ROUTER_MODEL` in `.env` and run:
+
+```powershell
+.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate --sessions 100 --seed 42 --output data/evaluations/groq-test-100 --score-only
+```
+
+The judge uses the public prompt in `evaluation/judge.py` and text-only context;
+it receives neither the ground-truth item nor the reference answer. One OpenRouter request is needed per prediction. Nemotron judging is enabled by
+default; use `--no-judge` to skip it. `--judge-model` overrides the configured
+OpenRouter judge model. No Gemini API calls are made.
+
+Outputs remain under the ignored `data/` directory:
+
+- `inputs.json` pins dataset revisions, chosen sessions and official catalog IDs.
+- `manifest.json` records settings, code hash and catalog configuration.
+- `checkpoint.jsonl` saves each completed prediction durably; rerun the same command
+  to resume. Configuration/code mismatches are rejected to prevent mixed results.
+- `predictions.json` contains the official prediction fields; `scores.json` contains
+  aggregate/per-turn scores, generation-mode counts and a session bootstrap interval.
+- `coverage.json` counts targets missing from the index; those targets remain scored.
+- Optional judge checkpoint and manifest record the proxy's model, prompt and scores.
+
+Missing predictions, invalid IDs and duplicate predictions fail validation instead
+of being silently omitted. Recommendation-provider fallback stops the run with `last_failure.json`,
+preserving completed predictions; use `--allow-fallbacks` only for an intentionally
+mixed-mode experiment. A failed/incomplete run does not produce aggregate scores.
+The percentile bootstrap resamples complete sessions 2,000 times; its descriptive
+95% interval does not capture model randomness or repeated users across sessions.
+Degenerate samples return no interval. Compare systems on the same selected sessions:
+catalog coverage and Distinct-2 depend on the number and length of responses.
+
 ## Verification
 
 ```powershell
@@ -158,6 +284,16 @@ Tests use small synthetic vectors with real Chroma/SQLite and LangGraph. They co
 ingestion joins/idempotency, vector separation, weighted scoring and missing values,
 self-user exclusion, user deduplication, specificity, ID/tag validation, tool calls,
 and provider failure behavior. They do not measure real recommendation quality.
+
+### Agent refactor verification (2026-11-17)
+
+The final `.venv-stable` run passed 28 tests, including all nine new tool-contract
+and agent regression cases. One existing retrieval test failed with Chroma's
+intermittent `Nothing found on disk` error, also documented below. The new tests
+cover model-facing schemas, injected context, typed outputs, unknown IDs, request
+isolation, long local queries, invalid tool calls and visible catalog failures.
+Ruff and `git diff --check` passed. Groq behavior uses a scripted model in tests;
+no live provider request was made for this refactor.
 
 ### Original environment verification (2026-11-09)
 
@@ -222,3 +358,27 @@ No Windows security settings were changed. Run all dependency checks with:
 - [TalkPlay training conversations](https://huggingface.co/datasets/talkpl-ai/TalkPlayData-Challenge-Dataset)
 - [TalkPlay track embeddings](https://huggingface.co/datasets/talkpl-ai/TalkPlayData-Challenge-Track-Embeddings)
 - [TalkPlay user embeddings](https://huggingface.co/datasets/talkpl-ai/TalkPlayData-Challenge-User-Embeddings)
+
+### Explanation validation repair
+
+A live Nemotron response omitted one of 17 selected track IDs. The agent now permits
+one correction request containing the validation error and evidence for only missing
+or invalid entries. Valid entries are retained, and the merged result is validated. The
+corrected draft must pass the same exact-ID, uniqueness and tag checks; a second
+failure remains a labeled fallback and stops strict evaluation. Truncation and
+missing/duplicate/unexpected IDs are now reported explicitly. The four-request
+upper bound includes this correction. Current retry artifacts use
+`data/evaluations/openrouter-nemotron-test-100-v3`.
+
+### Corrected model roles
+
+The intended evaluation uses Groq (`GROQ_MODEL`) for recommendations and OpenRouter
+Nemotron (`OPEN_ROUTER_MODEL`) as an independent text-only judge. Use a new output
+directory such as `data/evaluations/groq-nemotron-test-100` when generating this
+baseline; earlier `openrouter-nemotron-*` runs used Nemotron as the recommender and
+must not be relabeled as Groq results. The official challenge uses a private Gemini
+judge, so our Nemotron score and composite are explicitly local proxies.
+
+```powershell
+.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate --sessions 100 --seed 42 --mode groq --output data/evaluations/groq-nemotron-test-100
+```
