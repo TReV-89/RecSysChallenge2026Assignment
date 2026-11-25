@@ -1,0 +1,11 @@
+metric,value
+sessions,16199.0
+unique_users,8720.0
+catalog_tracks,47071.0
+music_turns,129592.0
+labeled_turns,113393.0
+positive_turns,60069.0
+positive_rate_labeled,0.5297
+user_item_sparsity,0.99987005
+positive_catalog_coverage,0.5554
+users_with_shared_track_fraction,0.915

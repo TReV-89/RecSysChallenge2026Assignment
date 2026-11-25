@@ -1,0 +1,63 @@
+{
+  "source": {
+    "challenge_sessions": 16199,
+    "train_sessions": 15199,
+    "test_sessions": 1000,
+    "catalog_tracks": 47071,
+    "train_embedding_users": 8591,
+    "test_warm_embedding_users": 371,
+    "test_cold_users": 129
+  },
+  "interaction_semantics": {
+    "music_turn_rows": 129592,
+    "labeled_rows": 113393,
+    "positive_rows": 60069,
+    "negative_rows": 53324,
+    "unlabeled_rows": 16199,
+    "important_limitation": "These are recommended tracks with next-turn goal feedback, not raw listening-history events.",
+    "feedback_alignment": "Assessment turn t labels the music recommendation at turn t-1."
+  },
+  "collaborative_feasibility": {
+    "train_positive_unique_user_track_pairs": 52550,
+    "users_with_positive_pseudo_interactions": 7790,
+    "catalog_coverage_fraction": 0.5553737970300184,
+    "user_item_density": 0.0001299497883661981,
+    "user_item_sparsity": 0.9998700502116338,
+    "tracks_shared_by_at_least_two_users": 8927,
+    "users_with_at_least_one_shared_positive_track": 7128,
+    "fraction_positive_users_with_shared_track": 0.9150192554557125,
+    "median_positive_tracks_per_user": 6.0,
+    "p90_positive_tracks_per_user": 12.0
+  },
+  "similarity_definition": {
+    "method": "cosine similarity on official 128-dimensional CF-BPR user embeddings",
+    "neighbor_pool": "training users only",
+    "neighbors_per_query": 30,
+    "candidate_score": "sum of positive cosine similarities over neighbors who supplied the track",
+    "candidate_limit": 100,
+    "cold_start_policy": "similarity retrieval when a test_cold row has a non-empty vector; global train-positive popularity fallback otherwise"
+  },
+  "internal_temporal_evaluation": {
+    "similar_user": {
+      "precision@20": 0.008373626373626373,
+      "recall@20": 0.03744845630559916,
+      "ndcg@20": 0.026906451336754043,
+      "hit_rate@20": 0.10505494505494506,
+      "evaluated_users": 2275
+    },
+    "popularity_baseline": {
+      "precision@20": 0.003406593406593407,
+      "recall@20": 0.017377289377289377,
+      "ndcg@20": 0.010998360391495317,
+      "hit_rate@20": 0.04879120879120879,
+      "evaluated_users": 2275
+    }
+  },
+  "leakage_checks": {
+    "test_sessions_in_internal_history": 0,
+    "validation_sessions_in_internal_history": 0,
+    "neighbor_pool_non_train_users": 0,
+    "cold_user_embedding_rows": 129,
+    "cold_user_nonempty_embeddings": 25
+  }
+}
