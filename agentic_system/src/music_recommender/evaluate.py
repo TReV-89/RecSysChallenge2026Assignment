@@ -191,7 +191,7 @@ def run(args):
                 from .evaluation.openrouter import require_turn_budget
 
                 try:
-                    allowance = require_turn_budget(settings.api_key())
+                    allowance = require_turn_budget(settings.api_key(), required=5)
                 except RuntimeError as exc:
                     write_json(
                         output / "run_status.json",

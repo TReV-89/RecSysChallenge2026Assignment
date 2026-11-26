@@ -15,25 +15,27 @@ def rank_tracks(
 ) -> list[RankedTrack]:
     """Rank retrieved tracks using numerical scores and artist diversity.
 
-    Call after retrieve_candidates. Exclude a track only when its catalog
-    metadata clearly conflicts with an explicit listener preference.
+    Call after the available retrieval sources have been merged. Exclude a track
+    only when its catalog metadata clearly conflicts with an explicit preference.
 
     Args:
         exclude_track_ids: Retrieved candidate IDs to omit; use [] if none.
             Unknown IDs raise ValueError.
-        retrieval: Application-provided result from retrieve_candidates.
+        retrieval: Application-provided merged candidate result.
         request: Application-provided listener weights, exclusions and limit.
             The model cannot supply or change retrieval or request.
 
     Returns:
         An ordered list of RankedTrack objects, each with score (float) and
-        candidate (track, query_score, neighbor_score, supporting_users). Track
-        contains track_id, title, artists and tags. Supporting users contain
-        user_id, similarity, track_affinity and evidence_type='semantic_affinity'.
+        candidate (track, query_score, neighbor_score, source_ranks,
+        supporting_users). Track contains track_id, title, artists and tags.
+        When prepared CF data is loaded, rankings use reciprocal ranks from
+        text and user-to-user retrieval. Supporting users then reflect positive
+        synthetic conversation feedback, not a verified listen or like.
         Highest scores come first, ties use track_id, and at most two tracks per
         primary artist are selected, up to the requested limit. The list can be
         empty. Scores express relative fit, not probabilities or recorded likes.
     """
-    from ..retrieval import rank_candidates
+    from ..ranking import rank_candidates
 
     return rank_candidates(retrieval, request, exclude_track_ids)

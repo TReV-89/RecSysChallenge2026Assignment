@@ -1,24 +1,12 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 Specificity = Literal["HH", "HL", "LH", "LL"]
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-
-
-class SimilarityWeights(StrictModel):
-    profile: float = Field(default=0.5, ge=0, le=1)
-    goal: float = Field(default=0.35, ge=0, le=1)
-    specificity: float = Field(default=0.15, ge=0, le=1)
-
-    @model_validator(mode="after")
-    def nonzero(self):
-        if self.profile + self.goal + self.specificity <= 0:
-            raise ValueError("At least one similarity weight must be positive.")
-        return self
 
 
 class ChatTurn(StrictModel):
@@ -33,20 +21,16 @@ class RecommendationRequest(StrictModel):
     specificity: Specificity | None = None
     user_id: str | None = None
     session_id: str | None = None
+    reference_track_id: str | None = None
     history: list[ChatTurn] = Field(default_factory=list)
     excluded_track_ids: list[str] = Field(default_factory=list)
-    weights: SimilarityWeights = Field(default_factory=SimilarityWeights)
-    query_weight: float = Field(default=0.75, ge=0, le=1)
     limit: int = Field(default=5, ge=1, le=20)
 
 
 class Neighbor(StrictModel):
     user_id: str
-    session_id: str
     score: float
-    profile_score: float | None
-    goal_score: float | None
-    specificity_score: float | None
+    source: Literal["cf_bpr"] = "cf_bpr"
 
 
 class Track(StrictModel):
@@ -59,8 +43,7 @@ class Track(StrictModel):
 class SupportingUser(StrictModel):
     user_id: str
     similarity: float
-    track_affinity: float
-    evidence_type: Literal["semantic_affinity"] = "semantic_affinity"
+    evidence_type: Literal["positive_conversation_feedback"] = "positive_conversation_feedback"
 
 
 class Candidate(StrictModel):
@@ -68,6 +51,8 @@ class Candidate(StrictModel):
     query_score: float
     neighbor_score: float
     supporting_users: list[SupportingUser]
+    source_ranks: dict[str, int] = Field(default_factory=dict)
+    fusion_score: float | None = None
 
 
 class RetrievalResult(StrictModel):
@@ -89,10 +74,17 @@ class Recommendation(StrictModel):
 
 
 class RecommendationResponse(StrictModel):
+    kind: Literal["chat", "recommendations"] = "recommendations"
+    message: str = ""
     recommendations: list[Recommendation]
     neighbors: list[Neighbor]
     notices: list[str]
     mode: Literal["groq", "openrouter", "local", "fallback"]
+
+
+class RouteDecision(StrictModel):
+    route: Literal["chat", "recommendations"]
+    use_item_to_item: bool = False
 
 
 class SearchArguments(StrictModel):
@@ -101,6 +93,12 @@ class SearchArguments(StrictModel):
         max_length=2000,
         description="Music search incorporating current request and relevant prior preferences.",
     )
+
+
+class ItemSearchArguments(StrictModel):
+    track_id: str = Field(min_length=1, description="Known catalog track ID from the conversation.")
+    vector_space: Literal["metadata", "cf"]
+    top_k: int = Field(ge=1, le=100)
 
 
 class RankingArguments(StrictModel):

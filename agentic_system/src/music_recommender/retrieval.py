@@ -1,17 +1,15 @@
+"""Candidate retrieval by source, followed by track-ID fusion and ranking."""
+
 from .embeddings import cosine01
 from .schemas import (
     Candidate,
     Neighbor,
-    RankedTrack,
     RecommendationRequest,
     RetrievalResult,
     SupportingUser,
     Track,
 )
-from .tools.calculate_user_similarity import (
-    calculate_user_similarity,
-    weighted_similarity,  # noqa: F401 - compatibility export
-)
+from .tools.calculate_user_similarity import find_cf_neighbors
 
 
 def as_list(value) -> list[str]:
@@ -23,11 +21,12 @@ def as_list(value) -> list[str]:
 
 
 def track_from_row(row: dict) -> Track:
-    titles = as_list(row.get("track_name"))
+    titles = as_list(row.get("track_name") or row.get("track_name_primary"))
+    artists = as_list(row.get("artist_name") or row.get("artist_name_primary"))
     return Track(
         track_id=row["track_id"],
         title=titles[0] if titles else "Untitled track",
-        artists=as_list(row.get("artist_name")),
+        artists=artists,
         tags=list(dict.fromkeys(as_list(row.get("tag_list")))),
     )
 
@@ -35,155 +34,179 @@ def track_from_row(row: dict) -> Track:
 class Retriever:
     def __init__(self, settings, store, embedder):
         self.settings, self.store, self.embedder = settings, store, embedder
+        self._training_cf_vectors = None
 
-    def similar_users(self, request: RecommendationRequest, query: str) -> list[Neighbor]:
-        profile_vector = (
-            self.embedder.query(request.profile, "profiles") if request.profile.strip() else None
-        )
-        goal_text = f"{request.goal}\nCurrent request: {query}".strip()
-        goal_vector = self.embedder.query(goal_text, "goals")
-        where = {"user_id": {"$ne": request.user_id}} if request.user_id else None
-        pool = set(self.store.search("goals", goal_vector, self.settings.neighbor_pool, where))
-        if profile_vector is not None:
-            pool.update(
-                self.store.search("profiles", profile_vector, self.settings.neighbor_pool, where)
-            )
-        if request.session_id:
-            pool.discard(request.session_id)
-        ids = sorted(pool)
-        sessions = self.store.records("sessions", ids)
-        profiles = self.store.vectors("profiles", ids)
-        goals = self.store.vectors("goals", ids)
-        best_per_user = {}
-        for session_id in ids:
-            row = sessions.get(session_id)
-            if row is None or row["user_id"] == request.user_id or row["split"] != "train":
-                continue
-            p = (
-                cosine01(profile_vector, profiles[session_id])
-                if profile_vector is not None and session_id in profiles
-                else None
-            )
-            g = cosine01(goal_vector, goals[session_id]) if session_id in goals else None
-            s = (
-                float(request.specificity == row["specificity"])
-                if request.specificity and row["specificity"]
-                else None
-            )
-            score = calculate_user_similarity.invoke(
-                {
-                    "profile_score": p,
-                    "goal_score": g,
-                    "specificity_score": s,
-                    "weights": request.weights,
-                }
-            )
-            neighbor = Neighbor(
-                user_id=row["user_id"],
-                session_id=session_id,
-                score=score,
-                profile_score=p,
-                goal_score=g,
-                specificity_score=s,
-            )
-            previous = best_per_user.get(neighbor.user_id)
-            if previous is None or neighbor.score > previous.score:
-                best_per_user[neighbor.user_id] = neighbor
-        return sorted(best_per_user.values(), key=lambda n: (-n.score, n.user_id))[
-            : self.settings.neighbor_count
-        ]
-
-    def retrieve(self, request: RecommendationRequest, query: str) -> RetrievalResult:
+    def _require_catalog(self) -> None:
         if not self.store.state("ready"):
             raise RuntimeError("The catalog is not ready. Complete ingestion first.")
-        query_vector = self.embedder.query(query, "tracks")
-        neighbors = self.similar_users(request, query)
-        profile_vectors = self.store.vectors("profiles", [n.session_id for n in neighbors])
-        # Obtain direct matches plus candidates suggested by similar listeners' profiles.
+
+    @staticmethod
+    def _empty(query: str = "") -> RetrievalResult:
+        return RetrievalResult(query=query, neighbors=[], candidates=[])
+
+    def retrieve_text(self, request: RecommendationRequest, query: str) -> RetrievalResult:
+        """Find tracks matching the current description in Qwen metadata space."""
+        self._require_catalog()
+        vector = self.embedder.query(query, "tracks")
         track_filter = (
             {"track_id": {"$nin": request.excluded_track_ids}}
             if request.excluded_track_ids
             else None
         )
-        candidates = set(
-            self.store.search("tracks", query_vector, self.settings.candidate_count, track_filter)
-        )
-        for neighbor in neighbors:
-            if neighbor.session_id in profile_vectors:
-                candidates.update(
-                    self.store.search(
-                        "tracks", profile_vectors[neighbor.session_id], 5, track_filter
-                    )
-                )
-        candidates.difference_update(request.excluded_track_ids)
-        ids = sorted(candidates)
-        track_rows = self.store.records("tracks", ids)
-        track_vectors = self.store.vectors("tracks", ids)
-        results = []
-        for track_id in ids:
-            if track_id not in track_rows or track_id not in track_vectors:
+        ids = self.store.search("tracks", vector, self.settings.candidate_count, track_filter)
+        ids = [track_id for track_id in ids if track_id not in request.excluded_track_ids]
+        rows = self.store.records("tracks", ids)
+        vectors = self.store.vectors("tracks", ids)
+        candidates = []
+        for rank, track_id in enumerate(ids, 1):
+            if track_id not in rows or track_id not in vectors:
                 continue
-            evidence = []
-            for neighbor in neighbors:
-                if neighbor.session_id in profile_vectors and neighbor.score > 0:
-                    evidence.append(
-                        SupportingUser(
-                            user_id=neighbor.user_id,
-                            similarity=neighbor.score,
-                            track_affinity=cosine01(
-                                profile_vectors[neighbor.session_id], track_vectors[track_id]
-                            ),
-                        )
-                    )
-            denominator = sum(e.similarity for e in evidence)
-            affinity = (
-                sum(e.similarity * e.track_affinity for e in evidence) / denominator
-                if denominator
-                else 0
-            )
-            evidence.sort(key=lambda e: (-e.similarity * e.track_affinity, e.user_id))
-            results.append(
+            candidates.append(
                 Candidate(
-                    track=track_from_row(track_rows[track_id]),
-                    query_score=cosine01(query_vector, track_vectors[track_id]),
-                    neighbor_score=affinity,
-                    supporting_users=evidence[:3],
+                    track=track_from_row(rows[track_id]),
+                    query_score=cosine01(vector, vectors[track_id]),
+                    neighbor_score=0.0,
+                    supporting_users=[],
+                    source_ranks={"text": rank},
                 )
             )
-        # Bound the LLM context; preserve a mix by using the eventual numerical score.
-        results.sort(key=lambda c: (-candidate_score(c, request.query_weight), c.track.track_id))
+        return RetrievalResult(query=query, neighbors=[], candidates=candidates)
+
+    def retrieve_cf(self, request: RecommendationRequest) -> RetrievalResult:
+        """Find tracks supported by eligible feedback from CF-BPR neighbors."""
+        self._require_catalog()
+        history_kind = "cf_history_" + self.settings.cf_history_mode
+        if not request.user_id or not self.store.state(f"{history_kind}_ready"):
+            return self._empty()
+        query_record = (
+            self.store.records("cf_query_vectors", [request.user_id]).get(request.user_id)
+            if self.store.state("cf_query_vectors_ready")
+            else None
+        )
+        user_vector = (
+            query_record["vector"]
+            if query_record is not None
+            else self.store.vectors("users_cf", [request.user_id]).get(request.user_id)
+        )
+        if user_vector is None:
+            return self._empty()
+        if self._training_cf_vectors is None:
+            self._training_cf_vectors = self.store.all_vectors("users_cf")
+        matches = find_cf_neighbors(request.user_id, user_vector, self._training_cf_vectors)
+        histories = self.store.records(history_kind, [user_id for user_id, _ in matches])
+        own_history = self.store.records(history_kind, [request.user_id]).get(request.user_id)
+        seen = set(own_history["track_ids"]) if own_history else set()
+        excluded = seen | set(request.excluded_track_ids)
+        support_scores: dict[str, float] = {}
+        supporters: dict[str, list[SupportingUser]] = {}
+        neighbors = []
+        for user_id, score in matches:
+            history = histories.get(user_id)
+            if history is None:
+                continue
+            if len(neighbors) < self.settings.neighbor_count:
+                neighbors.append(Neighbor(user_id=user_id, score=score, source="cf_bpr"))
+            for track_id in history["track_ids"]:
+                if track_id in excluded:
+                    continue
+                support_scores[track_id] = support_scores.get(track_id, 0.0) + score
+                supporters.setdefault(track_id, []).append(
+                    SupportingUser(
+                        user_id=user_id,
+                        similarity=score,
+                        evidence_type="positive_conversation_feedback",
+                    )
+                )
+        ordered = sorted(support_scores, key=lambda key: (-support_scores[key], key))
+        available = self.store.existing_record_ids("tracks", ordered)
+        ids = [track_id for track_id in ordered if track_id in available][
+            : self.settings.candidate_count
+        ]
+        rows = self.store.records("tracks", ids)
+        candidates = []
+        for rank, track_id in enumerate(ids, 1):
+            if track_id not in rows:
+                continue
+            evidence = sorted(
+                supporters[track_id], key=lambda item: (-item.similarity, item.user_id)
+            )[:3]
+            candidates.append(
+                Candidate(
+                    track=track_from_row(rows[track_id]),
+                    query_score=0.0,
+                    neighbor_score=support_scores[track_id],
+                    supporting_users=evidence,
+                    source_ranks={"user_to_user": rank},
+                )
+            )
+        return RetrievalResult(query="", neighbors=neighbors, candidates=candidates)
+
+    def item_candidates(
+        self, request: RecommendationRequest, ids: list[str], vector_space: str
+    ) -> RetrievalResult:
+        """Attach catalog metadata to the item tool's ordered track IDs."""
+        self._require_catalog()
+        ids = [
+            track_id
+            for track_id in dict.fromkeys(ids)
+            if track_id not in request.excluded_track_ids
+        ]
+        rows = self.store.records("tracks", ids)
+        candidates = [
+            Candidate(
+                track=track_from_row(rows[track_id]),
+                query_score=0.0,
+                neighbor_score=0.0,
+                supporting_users=[],
+                source_ranks={f"item_to_item_{vector_space}": rank},
+            )
+            for rank, track_id in enumerate(ids, 1)
+            if track_id in rows
+        ]
+        return RetrievalResult(query="", neighbors=[], candidates=candidates)
+
+    def merge_results(
+        self, request: RecommendationRequest, query: str, results: list[RetrievalResult]
+    ) -> RetrievalResult:
+        """Deduplicate tracks and sum reciprocal ranks across available sources."""
+        merged: dict[str, Candidate] = {}
+        neighbors: dict[str, Neighbor] = {}
+        for result in results:
+            for neighbor in result.neighbors:
+                neighbors[neighbor.user_id] = neighbor
+            for candidate in result.candidates:
+                track_id = candidate.track.track_id
+                if track_id in request.excluded_track_ids:
+                    continue
+                if track_id not in merged:
+                    merged[track_id] = candidate.model_copy(deep=True)
+                    continue
+                current = merged[track_id]
+                current.source_ranks.update(candidate.source_ranks)
+                current.query_score = max(current.query_score, candidate.query_score)
+                current.neighbor_score = max(current.neighbor_score, candidate.neighbor_score)
+                existing_users = {user.user_id for user in current.supporting_users}
+                current.supporting_users.extend(
+                    user for user in candidate.supporting_users if user.user_id not in existing_users
+                )
+        candidates = list(merged.values())
+        for candidate in candidates:
+            candidate.supporting_users.sort(key=lambda user: (-user.similarity, user.user_id))
+            candidate.supporting_users = candidate.supporting_users[:3]
+            candidate.fusion_score = sum(
+                1 / (60 + rank) for rank in candidate.source_ranks.values()
+            )
+        candidates.sort(key=lambda item: (-item.fusion_score, item.track.track_id))
         return RetrievalResult(
-            query=query, neighbors=neighbors, candidates=results[: self.settings.candidate_count]
+            query=query,
+            neighbors=sorted(neighbors.values(), key=lambda n: (-n.score, n.user_id))[
+                : self.settings.neighbor_count
+            ],
+            candidates=candidates[: self.settings.candidate_count],
         )
 
-
-def candidate_score(candidate: Candidate, query_weight: float) -> float:
-    if not candidate.supporting_users:
-        return candidate.query_score
-    return query_weight * candidate.query_score + (1 - query_weight) * candidate.neighbor_score
-
-
-def rank_candidates(
-    result: RetrievalResult, request: RecommendationRequest, excluded: list[str]
-) -> list[RankedTrack]:
-    known = {c.track.track_id for c in result.candidates}
-    if not set(excluded).issubset(known):
-        raise ValueError("Ranking agent tried to exclude IDs outside the retrieved candidates.")
-    rejected = set(excluded) | set(request.excluded_track_ids)
-    ranked = [
-        RankedTrack(candidate=c, score=candidate_score(c, request.query_weight))
-        for c in result.candidates
-        if c.track.track_id not in rejected
-    ]
-    ranked.sort(key=lambda r: (-r.score, r.candidate.track.track_id))
-    # Up to two songs per primary artist; stable ties make the numeric ranking repeatable.
-    selected, artist_counts = [], {}
-    for item in ranked:
-        artist = (item.candidate.track.artists or [item.candidate.track.track_id])[0].casefold()
-        if artist_counts.get(artist, 0) >= 2:
-            continue
-        selected.append(item)
-        artist_counts[artist] = artist_counts.get(artist, 0) + 1
-        if len(selected) == request.limit:
-            break
-    return selected
+    def retrieve(self, request: RecommendationRequest, query: str) -> RetrievalResult:
+        """Compatibility entry point for evaluation and non-graph callers."""
+        return self.merge_results(
+            request, query, [self.retrieve_text(request, query), self.retrieve_cf(request)]
+        )

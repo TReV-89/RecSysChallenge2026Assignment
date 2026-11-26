@@ -19,6 +19,7 @@ __pycache__/
 *$py.class
 .venv/
 .venv-stable/
+prepared-dataset-eda/.venv/
 venv/
 env/
 .ipynb_checkpoints/

@@ -1,9 +1,11 @@
 """Documented LangChain tools used by the recommendation agent."""
 
+from .item_to_item import item_to_item_similarity
 from .rank_tracks import rank_tracks
-from .retrieve_candidates import create_retrieval_tool
+from .retrieve_candidates import retrieve_candidates
+from .retrieve_user_to_user_candidates import retrieve_user_to_user_candidates
 
 
-def build_tools(retriever):
-    """Return the main agent's tools, bound to this catalog retriever."""
-    return [create_retrieval_tool(retriever), rank_tracks]
+def build_tools():
+    """Return the agent's tools; injected catalog context is passed at execution."""
+    return [retrieve_candidates, retrieve_user_to_user_candidates, item_to_item_similarity, rank_tracks]

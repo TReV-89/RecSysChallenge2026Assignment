@@ -17,10 +17,12 @@ def main():
             {
                 "datasets": "datasets",
                 "chromadb": "chromadb",
+                "fastapi": "fastapi",
                 "langchain_groq": "langchain-groq",
                 "langgraph.graph": "langgraph",
+                "langgraph.checkpoint.memory": "langgraph",
                 "sentence_transformers": "sentence-transformers",
-                "streamlit": "streamlit",
+                "uvicorn": "uvicorn",
             }
         )
     print(f"Interpreter: {sys.executable}", flush=True)

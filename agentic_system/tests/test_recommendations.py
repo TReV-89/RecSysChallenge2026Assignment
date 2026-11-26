@@ -1,18 +1,18 @@
 import numpy as np
 import pytest
-from pydantic import ValidationError
 
-from music_recommender.agent import build_agent, validate_explanations
+from music_recommender.agent import build_agent, known_reference, validate_explanations
 from music_recommender.config import Settings
 from music_recommender.embeddings import cosine01, validate_vector
 from music_recommender.ingest import ingest, session_record
-from music_recommender.retrieval import Retriever, rank_candidates, weighted_similarity
+from music_recommender.ranking import rank_candidates
+from music_recommender.retrieval import Retriever
 from music_recommender.schemas import (
     Candidate,
+    ChatTurn,
     ExplanationDraft,
     RecommendationRequest,
     RetrievalResult,
-    SimilarityWeights,
     Track,
     TrackExplanation,
 )
@@ -89,15 +89,6 @@ def catalog(tmp_path):
     return settings, CatalogStore(settings), report, loader
 
 
-def test_similarity_weights_and_missing_components():
-    weights = SimilarityWeights()
-    assert weighted_similarity(0.8, 0.4, 1, weights) == pytest.approx(0.69)
-    assert weighted_similarity(None, 0.4, None, weights) == pytest.approx(0.4)
-    assert weighted_similarity(None, None, None, weights) == 0
-    with pytest.raises(ValidationError):
-        SimilarityWeights(profile=0, goal=0, specificity=0)
-
-
 def test_embedding_spaces_and_missing_values():
     assert validate_vector([], 1024) is None
     with pytest.raises(ValueError):
@@ -134,12 +125,12 @@ def test_session_extraction_does_not_index_conversation_answers():
     assert "goal_progress_assessments" not in record
 
 
-def test_retrieval_deduplicates_users_and_excludes_self(catalog):
+def test_text_retrieval_excludes_requested_tracks_without_cf_history(catalog):
     settings, store, *_ = catalog
     retriever = Retriever(settings, store, FakeEmbedder())
     request = RecommendationRequest(message="ambient", profile="ambient", specificity="LL")
     result = retriever.retrieve(request, "ambient")
-    assert [n.user_id for n in result.neighbors] == ["u1", "u2"]
+    assert result.neighbors == []  # No CF history has been imported into this fixture.
     assert result.candidates[0].track.track_id == "t1"
     request.user_id = "u1"
     request.excluded_track_ids = ["t1"]
@@ -148,13 +139,16 @@ def test_retrieval_deduplicates_users_and_excludes_self(catalog):
     assert "t1" not in [c.track.track_id for c in result.candidates]
 
 
-def test_specificity_is_exact_match_and_unknown_is_omitted(catalog):
+def test_specificity_does_not_change_text_only_retrieval(catalog):
     settings, store, *_ = catalog
     retriever = Retriever(settings, store, FakeEmbedder())
     request = RecommendationRequest(message="ambient", specificity="HL")
-    assert all(n.specificity_score == 0 for n in retriever.similar_users(request, "ambient"))
+    first = retriever.retrieve(request, "ambient")
     request.specificity = None
-    assert all(n.specificity_score is None for n in retriever.similar_users(request, "ambient"))
+    second = retriever.retrieve(request, "ambient")
+    assert [c.track.track_id for c in first.candidates] == [
+        c.track.track_id for c in second.candidates
+    ]
 
 
 def test_ranker_and_explainer_reject_invented_ids_and_tags():
@@ -199,11 +193,137 @@ def test_local_graph_runs_end_to_end(catalog):
     ]
     assert response.mode == "local"
     assert response.recommendations[0].track.track_id == "t1"
-    assert all(
-        u.evidence_type == "semantic_affinity"
-        for r in response.recommendations
-        for u in r.supporting_users
+    assert response.neighbors == []
+
+
+def test_agent_uses_item_to_item_for_verified_reference(catalog):
+    settings, store, *_ = catalog
+    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()))
+    result = graph.invoke(
+        {
+            "request": RecommendationRequest(
+                message="More like this track, please",
+                reference_track_id="t1",
+            )
+        }
     )
+    assert result["response"].kind == "recommendations"
+    by_id = {candidate.track.track_id: candidate for candidate in result["retrieval"].candidates}
+    assert "item_to_item_metadata" in by_id["t3"].source_ranks
+    assert "t1" not in {
+        candidate.track.track_id
+        for candidate in result["retrieval"].candidates
+        if "item_to_item_metadata" in candidate.source_ranks
+    }
+
+
+def test_unresolved_anaphoric_reference_asks_for_track():
+    class NoSearch:
+        def retrieve(self, request, query):
+            raise AssertionError("Ambiguous reference triggered retrieval")
+
+    response = build_agent(Settings(), NoSearch()).invoke(
+        {"request": RecommendationRequest(message="More like that one")}
+    )["response"]
+    assert response.kind == "chat"
+    assert "Which track" in response.message
+
+
+def test_reference_resolves_from_validated_assistant_history():
+    track_id = "12345678-1234-1234-1234-123456789abc"
+
+    class Store:
+        def records(self, kind, ids):
+            return {track_id: {"track_id": track_id}} if track_id in ids else {}
+
+    state = {
+        "request": RecommendationRequest(
+            message="More like that one",
+            history=[ChatTurn(role="assistant", content=f"TrackID: {track_id}")],
+        )
+    }
+    assert known_reference(state, Store()) == track_id
+
+
+def test_single_prior_recommendation_can_be_item_reference(catalog):
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    settings, store, *_ = catalog
+    graph = build_agent(
+        settings, Retriever(settings, store, FakeEmbedder()), checkpointer=InMemorySaver()
+    )
+    config = {"configurable": {"thread_id": "item-followup"}}
+    first = graph.invoke(
+        {"request": RecommendationRequest(message="ambient", limit=1)}, config=config
+    )
+    reference = first["response"].recommendations[0].track.track_id
+    second = graph.invoke(
+        {"request": RecommendationRequest(message="More like that one")}, config=config
+    )
+    assert second["reference_track_id"] == reference
+    assert any(
+        "item_to_item_metadata" in candidate.source_ranks
+        for candidate in second["retrieval"].candidates
+    )
+
+
+def test_agent_can_select_cf_item_space_for_known_track(catalog):
+    from langchain_core.messages import AIMessage
+    from langchain_core.runnables import RunnableLambda
+
+    class ToolModel:
+        def __init__(self):
+            self.calls = []
+
+        def bind_tools(self, tools, tool_choice):
+            self.calls.append(tool_choice)
+            choices = {
+                "RouteDecision": {"route": "recommendations", "use_item_to_item": True},
+                "retrieve_candidates": {"query": "calm"},
+                "item_to_item_similarity": {
+                    "track_id": "t1", "vector_space": "cf", "top_k": 5
+                },
+                "rank_tracks": {"exclude_track_ids": []},
+            }
+            return RunnableLambda(
+                lambda messages: AIMessage(
+                    content="",
+                    tool_calls=[{"name": tool_choice, "args": choices[tool_choice], "id": "call"}],
+                )
+            )
+
+        def with_structured_output(self, *args, **kwargs):
+            raise RuntimeError("Use local explanations in this test")
+
+    settings, store, *_ = catalog
+    model = ToolModel()
+    result = build_agent(settings, Retriever(settings, store, FakeEmbedder()), model).invoke(
+        {"request": RecommendationRequest(message="Find tracks with the same vibe", reference_track_id="t1")}
+    )
+    assert "item_to_item_similarity" in model.calls
+    assert any(
+        "item_to_item_cf" in candidate.source_ranks
+        for candidate in result["retrieval"].candidates
+    )
+
+
+def test_graph_saves_state_to_configured_checkpoint(catalog):
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    settings, store, *_ = catalog
+    graph = build_agent(
+        settings,
+        Retriever(settings, store, FakeEmbedder()),
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "conversation-123"}}
+    request = RecommendationRequest(message="ambient")
+
+    graph.invoke({"request": request, "notices": []}, config=config)
+
+    snapshot = graph.get_state(config)
+    assert snapshot.values["request"] == request
+    assert snapshot.values["response"]
 
 
 class UnavailableLLM:
@@ -233,7 +353,10 @@ class ScriptedLLM:
         from langchain_core.messages import AIMessage
         from langchain_core.runnables import RunnableLambda
 
-        assert {tool.name for tool in tools} == {"retrieve_candidates", "rank_tracks"}
+        assert {tool.name for tool in tools} == {
+            "retrieve_candidates", "retrieve_user_to_user_candidates",
+            "item_to_item_similarity", "rank_tracks"
+        }
         self.calls.append(tool_choice)
         args = (
             {"query": "ambient"}

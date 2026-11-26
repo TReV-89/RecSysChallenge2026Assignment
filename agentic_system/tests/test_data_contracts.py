@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from music_recommender.config import Settings
 from music_recommender.embeddings import cosine01, validate_vector
 from music_recommender.ingest import ingest, session_record
-from music_recommender.schemas import RecommendationRequest, SimilarityWeights
+from music_recommender.schemas import RecommendationRequest
 from music_recommender.store import CatalogStore
 
 
@@ -37,9 +37,7 @@ def test_requests_reject_unknown_labels_and_bad_weights():
     with pytest.raises(ValidationError):
         RecommendationRequest(message="music", specificity="invented")
     with pytest.raises(ValidationError):
-        SimilarityWeights(profile=0, goal=0, specificity=0)
-    with pytest.raises(ValidationError):
-        SimilarityWeights(profile=float("nan"))
+        RecommendationRequest(message="music", weights={})
     with pytest.raises(ValidationError):
         RecommendationRequest(message="music", unexpected="field")
 

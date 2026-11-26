@@ -1,6 +1,6 @@
 # TalkPlay music recommendation prototype
 
-Streamlit chat backed by Chroma, local Qwen embeddings, LangGraph, LangChain tools,
+FastAPI recommendation API backed by Chroma, local Qwen embeddings, LangGraph, LangChain tools,
 Pydantic and Groq or OpenRouter. The default Groq model is `openai/gpt-oss-20b`, which Groq
 lists on its free plan. Free usage requires a Groq account/key and is subject to
 account quotas. The application does not upgrade plans or switch models automatically.
@@ -10,7 +10,7 @@ OpenRouter supports `nvidia/nemotron-3-ultra-550b-a55b:free`. Configure
 `OPENROUTER_MODEL` are also accepted). A blank model selects that Nemotron model.
 The app defaults to Groq for recommendations. OpenRouter credentials do not change
 that default; they are used separately for the Nemotron judge. Set `LLM_PROVIDER`
-explicitly only to change the recommendation provider. The sidebar can also select a provider.
+explicitly to change the recommendation provider.
 OpenRouter explanations use `function_calling` plus Pydantic validation because
 this model advertises tool calling, not JSON-schema response formatting.
 
@@ -25,41 +25,49 @@ python -m venv .venv-stable  # Skip if .venv-stable already exists.
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Set `GROQ_API_KEY` in `.env`, or enter it in the app's password field. The key is
-optional for **local retrieval mode**, which runs the same retrieval/ranking tools
-and uses template explanations without any Groq requests.
+Set `GROQ_API_KEY` in `.env` to enable provider-generated ranking and explanations.
+The key is optional for **local retrieval mode**, which runs the same retrieval/ranking
+tools and uses template explanations without provider requests.
 
 On this Windows machine, use `.venv-stable`: official older releases of PyTorch
 2.9.1, pandas 2.3.3 and xxhash 3.6.0 have passed import and basic-operation checks.
 The constraints file preserves these versions during installation. The original
 `.venv` is retained; its newer native libraries were blocked by Smart App Control.
 
-Build a small index first (300 source tracks and 24 training sessions):
-
-```powershell
-.\.venv-stable\Scripts\python.exe -m music_recommender.ingest --sample
-.\.venv-stable\Scripts\python.exe -m streamlit run app.py
-```
-
-Select **Sample catalog** in the sidebar. The first ingestion downloads the Qwen
-model, which is substantially larger than the sample dataset. Query and profile
-embedding inference runs on CPU by default; set `EMBEDDING_DEVICE=cuda` for an
-appropriately configured GPU. Allow several GB of free disk/RAM. Downloads and
-indexes stay in ignored local `.cache/` and `data/` directories.
-
-For meaningful recommendation testing, build the full catalog:
+Build the catalog before starting the API:
 
 ```powershell
 .\.venv-stable\Scripts\python.exe -m music_recommender.ingest
+.\.venv-stable\Scripts\python.exe -m music_recommender.cf_data --mode official_test
+.\.venv-stable\Scripts\python.exe -m uvicorn main:app --reload
 ```
 
-This streams the Hugging Face datasets and locally embeds the training profiles
-and goals. Full setup can take substantial time on CPU. Re-running the same command
+The first ingestion downloads the Qwen model. Query and profile embedding inference
+runs on CPU by default; set `EMBEDDING_DEVICE=cuda` for an appropriately configured
+GPU. Allow several GB of free disk/RAM. Downloads and indexes stay in ignored local
+`.cache/` and `data/` directories.
+
+The API uses the full `data/catalog` index by default. For a small setup check,
+set `TALKPLAY_CATALOG=sample` in `.env` and build the sample index:
+
+```powershell
+.\.venv-stable\Scripts\python.exe -m music_recommender.ingest --sample
+```
+
+Ingestion streams the Hugging Face datasets and locally embeds the training profiles
+and goals. Full-catalog setup can take substantial time on CPU. Re-running ingestion
 upserts supplied vectors and skips already embedded profile/goal IDs. An index is
 marked ready only after ingestion finishes. Sample and full indexes live separately
 in `data/sample` and `data/catalog`. Stop ingestion before using its catalog in the
-app. For different embedding settings, use a new `--data-dir`; never mix models
+API. For different embedding settings, use a new `--data-dir`; never mix models
 or dimensions in an existing index.
+
+The second command loads eligible positive training pseudo-interactions from
+`../prepared-dataset-eda/data` and the public `test_warm` and `test_cold` CF-BPR
+query-vector splits. For internal temporal validation, load with
+`--mode internal_validation --skip-test-vectors` and set
+`CF_HISTORY_MODE=internal_validation` in the app environment. Held-out targets
+are excluded from retrieval.
 
 ## Data mapping
 
@@ -72,6 +80,7 @@ All repositories are under `talkpl-ai/` on Hugging Face:
 | `TalkPlayData-Challenge-User-Metadata` | `all_users` | Stored user metadata keyed by `user_id` |
 | `TalkPlayData-Challenge-Track-Embeddings` | `all_tracks` | Published Qwen metadata vectors and separate BPR track factors |
 | `TalkPlayData-Challenge-User-Embeddings` | `train` | Published BPR user factors in their own collection |
+| `TalkPlayData-Challenge-User-Embeddings` | `test_warm`, `test_cold` | Query factors imported separately by `cf_data.py` |
 
 The published **user vectors are 128-dimensional `cf-bpr` factors**, not Qwen
 text embeddings. The track dataset has several modalities; this prototype uses
@@ -81,14 +90,17 @@ No supplied catalog vector is re-embedded. Additional session profile and goal
 vectors are generated locally using `Qwen/Qwen3-Embedding-0.6B`. Query embeddings
 use Qwen's `Instruct: ...\nQuery: ...` format with task-specific instructions.
 
-Collections keep Qwen and BPR spaces separate. BPR vectors are retained for future
-collaborative experiments; they do **not** affect the default semantic scores.
+Collections keep Qwen and BPR spaces separate. After the prepared CF import,
+training BPR user vectors and eligible conversational evidence contribute a
+separate user-to-user candidate route; test query vectors remain outside the
+training neighbor pool.
 Track metadata and session context live in SQLite so nested/list-valued fields are
 preserved without depending on Chroma metadata serialization.
 
-Only training profile/goal context is indexed. Conversation responses, hidden
-`thought` fields, progress assessments and test conversations are not indexed.
-In the interactive app, selecting a training session preloads its supplied goal.
+Only training profile/goal context is indexed as text. Conversation responses,
+hidden `thought` fields, and test conversations are not text-indexed. The CF
+import separately stores eligible positive training feedback as track IDs.
+API requests can select a training session to use as recommendation context.
 The separate test evaluation runner omits conversation goals and specificity to
 avoid disclosing information unavailable at the current conversation turn.
 
@@ -96,86 +108,66 @@ avoid disclosing information unavailable at the current conversation turn.
 
 ```mermaid
 flowchart LR
-    Chat[Streamlit chat and session context] --> Agent[Main agent in agent.py]
-    Agent --> Retrieve[retrieve_candidates tool]
-    Retrieve --> Similarity[calculate_user_similarity tool]
-    Retrieve --> Rank[rank_tracks tool]
-    Rank --> Explain[Validated explanation step]
-    Explain --> Output[Pydantic recommendation response]
+    API["POST /chat or /recommendations"] --> Route{"Conversation route"}
+    Route -- "chat or greeting" --> Chat["Conversational answer"]
+    Route -- "music request" --> Retrieve["Retrieve candidate sources"]
+    Retrieve --> Text["retrieve_candidates: Qwen text candidates"]
+    Retrieve --> CF["retrieve_user_to_user_candidates: CF-BPR neighbors and eligible feedback"]
+    Retrieve --> Item["item_to_item_similarity: known catalog track"]
+    Text --> Merge["Track-ID merge and reciprocal-rank fusion"]
+    CF --> Merge
+    Item --> Merge
+    Merge --> Rank["rank_tracks"]
+    Rank --> Explain["Evidence-checked explanations"]
 ```
 
-`src/music_recommender/agent.py` owns `MAIN_AGENT_PROMPT` and
-`build_agent(settings, retriever, llm=None, *, prompt=MAIN_AGENT_PROMPT)`. It builds
-the tool list through `tools.build_tools(retriever)` and binds that list to the
-model. One agent follows three bounded LangGraph steps: retrieve, rank, explain.
-The graph forces the appropriate tool at each step, preserving the bounded request
-budget. It uses an explicit `StateGraph`, rather than a free-running ReAct loop.
+`main.py` opens the ready catalog and builds the graph. The HTTP router exposes
+both `POST /chat` and the compatible `POST /recommendations` endpoint. Pass
+`X-Conversation-ID` to associate in-memory graph checkpoints across requests;
+the client still supplies its prior `history` and excluded track IDs. A reply
+contains `kind` (`chat` or `recommendations`), a conversational `message`,
+and any recommendation entries.
 
-Each tool lives in its own module under `src/music_recommender/tools/`:
+The graph first routes each turn. Clear greetings are handled locally without
+retrieval. With a configured LLM, ambiguous turns receive a bounded route
+decision; the conversational branch can answer without calling music tools.
+Recommendation turns use the text `retrieve_candidates` tool, call
+`retrieve_user_to_user_candidates` when a listener ID is supplied, optionally
+call `item_to_item_similarity`, then merge the sources and call `rank_tracks`
+and a separate explanation step. The application injects listener identity
+into the user-to-user tool; the model cannot choose another user's history.
+`retrieval.py` owns source retrieval and track-ID fusion; `ranking.py` owns
+numeric order, exclusions and artist diversity. The tool files expose these
+operations to the graph and document the arguments visible to the model.
 
-- `retrieve_candidates.py`: catalog search and similar listener evidence.
-- `rank_tracks.py`: deterministic ranking, exclusions and artist diversity.
-- `calculate_user_similarity.py`: weighted similarity, called internally by retrieval.
+After `cf_data.py` imports prepared evidence, the graph combines text-to-item
+candidates with user-to-user candidates when the query user has a published
+CF-BPR vector. The query is compared by cosine similarity with the
+**full training-vector pool**, excluding itself. Neighbor tracks come only from
+eligible positive training pseudo-interactions. The API returns only a bounded
+neighbor summary; candidate support can use every eligible neighbor.
+Users with no usable CF-BPR vector receive text candidates.
 
-The decorated functions' docstrings describe their purpose, inputs, return fields,
-empty results and relevant constraints. LangChain exposes these descriptions to
-the model. Request and retrieval arguments use `InjectedToolArg`: Python supplies
-them at execution time, and they are excluded from the model-facing input schemas.
-The model selects only the search query and candidate IDs to exclude. Full typed
-results remain in graph state; only bounded catalog evidence is sent to Groq.
-`graph.py` retains compatibility imports for existing callers.
-
-1. **Retrieval step:** one Groq tool call constructs the current music query using
-   recent conversation. The retrieval tool finds tracks and training sessions;
-   `calculate_user_similarity` combines the three components. The current user is
-   excluded and only the best matching session per other user is kept.
-2. **Ranking step:** one tool call can exclude candidate IDs that clearly conflict
-   with explicit preferences. Python computes the score and stable order, limits
-   any primary artist to two tracks, and ranks the supporting users by their weighted
-   track affinity. The agent cannot invent candidates or numerical scores.
-3. **Explanation step:** a separate structured-output request explains the selected
-   tracks. Pydantic validates the output, and application checks enforce exact track
-   IDs, no duplicates, and catalog-backed cited tags. Titles/artists always come from
-   metadata. Free-text explanations still require evaluation for semantic accuracy.
-
-Tool calling and JSON Schema output are separate requests. Maximum four provider
-requests per turn, including one explanation-validation correction; zero transport retries, and bounded candidate/history context
-limit inference cost. Provider/schema failures produce visibly labeled local
-fallbacks. A rate-limited account can still use local retrieval. Temperature zero
-and structured outputs do not promise identical LLM decisions across runs.
+When the request includes a verified `reference_track_id`, or a single prior
+recommendation resolves "more like that," the graph calls `item_to_item_similarity`.
+An unresolved "that track" receives a clarification question. A separate direct
+user-to-item tool is a later subtask. Without prepared CF data, recommendation
+retrieval uses text and any available item reference; the old profile/goal
+neighbor path has been removed.
 
 ## Scores and assumptions
 
-Cosine values are mapped to `[0, 1]` by `(cosine + 1) / 2`. Similarities are relative
-scores, not probabilities or evidence of recorded likes.
+The CF path keeps raw cosine and neighbor-support values as evidence but ranks
+the merged candidates by reciprocal source ranks: each available source adds
+`1 / (60 + rank)`. This avoids adding incomparable Qwen similarity and CF
+support scores. Explicit exclusions are applied before final ranking, and the
+ranker enforces the requested limit and artist diversity. The constant and
+source contributions still require held-out validation.
 
-```text
-user_similarity = weighted_mean(profile_similarity, goal_similarity, specificity_match)
-default weights = 0.50 profile + 0.35 goal + 0.15 specificity
-specificity_match = 1 if the dataset labels match exactly, otherwise 0
-
-neighbor_affinity(track) = weighted_mean(
-    cosine01(neighbor_profile_vector, track_vector), weights=user_similarity
-)
-track_score = 0.75 * query_similarity + 0.25 * neighbor_affinity
-```
-
-Missing components are omitted and remaining weights renormalized. Unspecified
-specificity is not guessed. Unknown/new listeners can enter a profile or rely on
-goal similarity. Without usable neighbor evidence the track score is query
-similarity alone. All weights are adjustable in the sidebar and require validation
-on held-out data; these defaults are not tuned.
-
-User candidate generation takes the union of top profile and goal matches and then
-applies the combined score; it is an approximate candidate search, not a full scan
-for the global optimum of all three components. Specificity is compared as an exact
-categorical label without inventing meanings for its two letters. Similar user
-support is **predicted semantic affinity**, never an assertion that those users
-liked, listened to, or endorsed a track.
-
-Conversation history is scoped to the browser session. Changing the selected
-profile/catalog or pressing **Start a new conversation** resets it. The app can
-exclude previous suggestions. It does not persist chat across server restarts.
+Positive neighbor evidence means a track was recommended in a synthetic
+conversation followed by feedback indicating goal progress. It does not prove
+a listen, like, rating, or endorsement. Missing sources contribute no rank
+term; text retrieval remains available when a CF-BPR vector is absent.
 
 ## Test-set evaluation
 
@@ -198,7 +190,7 @@ For an explicitly requested OpenRouter recommendation experiment (not the defaul
 
 The CLI's `--mode` selects the provider explicitly. Free OpenRouter models are checked
 against the account's `free_model_daily_requests` allowance before each turn. If fewer
-than four requests remain, execution stops and preserves its checkpoint. Run the
+than five requests remain, execution stops and preserves its checkpoint. Run the
 same command after the allowance resets to resume. `allowance.json` records the most
 recent daily counter; `run_status.json` records completion progress. No paid model
 substitution or credit purchase is performed. See [OpenRouter limits](https://openrouter.ai/docs/api/reference/limits).
@@ -206,8 +198,9 @@ substitution or credit purchase is performed. See [OpenRouter limits](https://op
 Use `--sessions 300` for a larger sample, or `--sessions 0` for all 1,000 sessions,
 with a different output directory. Sample selection is deterministic and independent
 of dataset row order. Ten sessions is a smoke test, not a dependable quality estimate.
-One hundred sessions means 800 predictions and up to 3,200 provider requests (including correction attempts); the full
-split means up to 32,000 requests (including correction attempts). `--delay SECONDS` spaces turns if needed.
+One hundred sessions means 800 predictions and up to 4,000 provider requests
+(including route selection and an explanation correction); the full split means
+up to 40,000 requests. `--delay SECONDS` spaces turns if needed.
 `--mode local` explicitly evaluates retrieval with template explanations instead.
 Use distinct output directories for different modes, samples and model versions.
 
@@ -277,7 +270,7 @@ catalog coverage and Distinct-2 depend on the number and length of responses.
 
 ```powershell
 .\.venv-stable\Scripts\python.exe -m pytest -q
-.\.venv-stable\Scripts\python.exe -m ruff check src tests app.py
+.\.venv-stable\Scripts\python.exe -m ruff check src tests main.py
 ```
 
 Tests use small synthetic vectors with real Chroma/SQLite and LangGraph. They cover
@@ -306,7 +299,7 @@ Full runtime verification in the original `.venv` was blocked by **Windows Appli
 it rejects native modules in `xxhash`, pandas, and PyTorch (`WinError 4551` for
 `torch.dll`). Activation does not resolve this OS-level block. Dataset ingestion
 stops before downloading the dataset/model, and the sample index is not ready.
-The full graph tests and Streamlit flow have not been verified. After credentials
+The full graph tests and API flow were not verified in that environment. After credentials
 were configured, Hugging Face authentication and a live strict JSON Schema response
 from Groq's `openai/gpt-oss-20b` both passed via direct HTTPS requests. These checks
 confirm the keys/provider work, but do not validate the blocked LangChain runtime.

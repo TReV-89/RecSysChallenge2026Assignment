@@ -46,10 +46,22 @@ prepared-dataset-eda/
 
 ## Reproduce the EDA
 
-From this directory:
+From the repository root, create and populate a local virtual environment:
 
-```bash
-python -m pip install -r requirements.txt
+```powershell
+py -m venv prepared-dataset-eda\.venv
+prepared-dataset-eda\.venv\Scripts\python.exe -m pip install -r prepared-dataset-eda\requirements.txt
+```
+
+In VS Code, open `eda.ipynb` and select the `prepared-dataset-eda\.venv`
+Python interpreter as the notebook kernel. The environment includes `ipykernel`
+for notebook execution.
+
+To regenerate the static EDA outputs, run these commands from this directory
+after activating the virtual environment:
+
+```powershell
+.venv\Scripts\Activate.ps1
 python scripts/build_eda_summary.py
 python scripts/create_static_eda.py
 ```
