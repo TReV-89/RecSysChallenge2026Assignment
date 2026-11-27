@@ -69,6 +69,15 @@ class CatalogStore:
                 [(kind, row[id_field], json.dumps(row, ensure_ascii=False)) for row in rows],
             )
 
+    def replace_records(self, kind: str, rows: list[dict], id_field: str):
+        """Replace one derived record collection without retaining stale users."""
+        with self.connect() as db:
+            db.execute("DELETE FROM records WHERE kind=?", (kind,))
+            db.executemany(
+                "INSERT INTO records VALUES (?,?,?)",
+                [(kind, row[id_field], json.dumps(row, ensure_ascii=False)) for row in rows],
+            )
+
     def records(self, kind: str, ids: list[str] | None = None) -> dict[str, dict]:
         with self.connect() as db:
             if ids is None:
@@ -88,6 +97,22 @@ class CatalogStore:
                     )
         return {key: json.loads(payload) for key, payload in rows}
 
+    def existing_record_ids(self, kind: str, ids: list[str]) -> set[str]:
+        """Check catalog membership without decoding every metadata payload."""
+        found = set()
+        with self.connect() as db:
+            for start in range(0, len(ids), 500):
+                batch = ids[start : start + 500]
+                placeholders = ",".join("?" for _ in batch)
+                found.update(
+                    row[0]
+                    for row in db.execute(
+                        f"SELECT id FROM records WHERE kind=? AND id IN ({placeholders})",
+                        [kind, *batch],
+                    )
+                )
+        return found
+
     def upsert(self, kind: str, ids, embeddings, metadata):
         if ids:
             self.collections[kind].upsert(ids=ids, embeddings=embeddings, metadatas=metadata)
@@ -97,6 +122,22 @@ class CatalogStore:
             return {}
         result = self.collections[kind].get(ids=list(dict.fromkeys(ids)), include=["embeddings"])
         return dict(zip(result["ids"], result["embeddings"]))
+
+    def existing_vector_ids(self, kind: str, ids: list[str]) -> set[str]:
+        """Check indexed IDs without loading their embeddings."""
+        if not ids:
+            return set()
+        result = self.collections[kind].get(ids=list(dict.fromkeys(ids)), include=[])
+        return set(result["ids"])
+
+    def all_vectors(self, kind: str, batch_size: int = 500) -> dict[str, list[float]]:
+        """Load a complete indexed vector pool in bounded Chroma batches."""
+        collection = self.collections[kind]
+        result = {}
+        for offset in range(0, collection.count(), batch_size):
+            batch = collection.get(limit=batch_size, offset=offset, include=["embeddings"])
+            result.update(zip(batch["ids"], batch["embeddings"]))
+        return result
 
     def search(self, kind: str, vector, limit: int, where=None) -> list[str]:
         collection = self.collections[kind]

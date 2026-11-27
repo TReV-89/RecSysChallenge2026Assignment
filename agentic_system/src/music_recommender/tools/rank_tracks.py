@@ -1,39 +1,46 @@
-"""Deterministic ranking tool for already retrieved candidates."""
+"""Deterministic ranking tool over everything retrieved so far this turn."""
 
-from typing import Annotated
+from langchain_core.tools import tool
 
-from langchain_core.tools import InjectedToolArg, tool
-
-from ..schemas import RankedTrack, RecommendationRequest, RetrievalResult
+from ._common import as_tool_content
 
 
-@tool
-def rank_tracks(
-    exclude_track_ids: list[str],
-    retrieval: Annotated[RetrievalResult, InjectedToolArg],
-    request: Annotated[RecommendationRequest, InjectedToolArg],
-) -> list[RankedTrack]:
-    """Rank retrieved tracks using numerical scores and artist diversity.
+def make_rank_tracks_tool(retriever, request, collected: list, result_box: dict):
+    @tool
+    def rank_tracks(exclude_track_ids: list[str]) -> str:
+        """Finalize the ranked track list from everything retrieved so far.
 
-    Call after retrieve_candidates. Exclude a track only when its catalog
-    metadata clearly conflicts with an explicit listener preference.
+        Call exactly once, after retrieving and before your final answer.
+        Merges/dedupes every retrieval tool's results this turn, scores them
+        deterministically, and caps two tracks per artist. You do not set
+        scores; only exclude candidates whose metadata clearly conflicts with
+        an explicit listener preference.
 
-    Args:
-        exclude_track_ids: Retrieved candidate IDs to omit; use [] if none.
-            Unknown IDs raise ValueError.
-        retrieval: Application-provided result from retrieve_candidates.
-        request: Application-provided listener weights, exclusions and limit.
-            The model cannot supply or change retrieval or request.
+        Args:
+            exclude_track_ids: Retrieved IDs to omit; [] if none. An ID
+                outside the retrieved candidates raises an error.
 
-    Returns:
-        An ordered list of RankedTrack objects, each with score (float) and
-        candidate (track, query_score, neighbor_score, supporting_users). Track
-        contains track_id, title, artists and tags. Supporting users contain
-        user_id, similarity, track_affinity and evidence_type='semantic_affinity'.
-        Highest scores come first, ties use track_id, and at most two tracks per
-        primary artist are selected, up to the requested limit. The list can be
-        empty. Scores express relative fit, not probabilities or recorded likes.
-    """
-    from ..retrieval import rank_candidates
+        Returns:
+            Final ranked list (track_id, title, artists, tags, score); may
+            be empty. Use these exact values; never invent a score.
+        """
+        from ..ranking import rank_candidates
 
-    return rank_candidates(retrieval, request, exclude_track_ids)
+        merged = retriever.merge_results(request, request.message, collected)
+        ranked = rank_candidates(merged, request, exclude_track_ids)
+        result_box["ranked"] = ranked
+        result_box["retrieval"] = merged
+        return as_tool_content(
+            [
+                {
+                    "track_id": item.candidate.track.track_id,
+                    "title": item.candidate.track.title,
+                    "artists": item.candidate.track.artists,
+                    "tags": item.candidate.track.tags[:12],
+                    "score": round(item.score, 4),
+                }
+                for item in ranked
+            ]
+        )
+
+    return rank_tracks

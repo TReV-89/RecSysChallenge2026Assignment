@@ -115,8 +115,9 @@ def load_inputs(settings, output, count, seed):
 
 def run(args):
     settings = Settings.from_env()
-    if args.mode != "local":
-        settings.llm_provider = args.mode
+    settings.llm_provider = args.mode
+    settings.explanation_provider = getattr(args, "explanation_provider", "same")
+    settings.cf_history_mode = "official_test"
     settings.data_dir = (args.data_dir or settings.data_dir / "catalog").resolve()
     # Twenty explanations need more space than the interactive five-track default.
     settings.max_output_tokens = 4096
@@ -141,6 +142,12 @@ def run(args):
         store = CatalogStore(settings)
         if not store.state("ready") or (store.state("scope") or {}).get("sample") is not False:
             raise ValueError("Evaluation requires a ready full catalog, not a sample index.")
+        from .cf_data import load_history
+
+        prepared_dir = args.prepared_dir.resolve()
+        history_report = load_history(store, prepared_dir, "official_test")
+        if not store.state("cf_query_vectors_ready"):
+            raise ValueError("Load published test query vectors with music_recommender.cf_data first.")
         source_root = Path(__file__).parent
         source_hash = digest(
             {
@@ -150,6 +157,14 @@ def run(args):
         )
         manifest = {
             "protocol": "public-test-teacher-forced-v1",
+            "prepared_history": {
+                "source": str(prepared_dir / "conversation_interactions.parquet"),
+                "sha256": hashlib.sha256(
+                    (prepared_dir / "conversation_interactions.parquet").read_bytes()
+                ).hexdigest(),
+                "eligible_rows": history_report,
+                "query_vectors_hash": digest(store.records("cf_query_vectors")),
+            },
             "input_hash": digest(bundle),
             "mode": args.mode,
             "settings": settings.model_dump(mode="json"),
@@ -166,11 +181,9 @@ def run(args):
         if predictions and existing_manifest is None:
             raise ValueError("Checkpoint has no manifest; cannot safely resume.")
         write_json(manifest_path, manifest)
-        if args.mode != "local" and not settings.api_key():
-            raise ValueError(
-                f"API key is required for --mode {args.mode}; use --mode local explicitly otherwise."
-            )
-        llm = create_llm(settings, settings.api_key()) if args.mode != "local" else None
+        if not settings.api_key():
+            raise ValueError(f"API key is required for --mode {args.mode}.")
+        llm = create_llm(settings, settings.api_key())
         agent = build_agent(settings, Retriever(settings, store, LocalEmbedder(settings)), llm)
         indexed = set(store.records("tracks"))
         write_json(
@@ -191,7 +204,7 @@ def run(args):
                 from .evaluation.openrouter import require_turn_budget
 
                 try:
-                    allowance = require_turn_budget(settings.api_key())
+                    allowance = require_turn_budget(settings.api_key(), required=5)
                 except RuntimeError as exc:
                     write_json(
                         output / "run_status.json",
@@ -206,7 +219,7 @@ def run(args):
                 write_json(output / "allowance.json", allowance)
             started = time.monotonic()
             response = agent.invoke({"request": case.request, "notices": []})["response"]
-            if args.mode != "local" and response.mode == "fallback" and not args.allow_fallbacks:
+            if response.mode == "fallback" and not args.allow_fallbacks:
                 write_json(
                     output / "run_status.json",
                     {
@@ -345,8 +358,14 @@ def main():
         "--sessions", type=int, default=100, help="Random complete sessions; 0 means all."
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--mode", choices=["groq", "openrouter", "local"], default="groq")
+    parser.add_argument("--mode", choices=["groq", "openrouter"], default="groq")
     parser.add_argument("--data-dir", type=Path)
+    parser.add_argument(
+        "--prepared-dir", type=Path,
+        default=Path(__file__).resolve().parents[3] / "prepared-dataset-eda" / "data",
+        help="Prepared dataset directory; only positive labeled training interactions are used.",
+    )
+    parser.add_argument("--explanation-provider", choices=["same", "openrouter"], default="same")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--delay", type=float, default=0, help="Seconds between recommendation turns."

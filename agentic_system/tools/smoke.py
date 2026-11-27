@@ -1,4 +1,4 @@
-"""Exercise the actual catalog and local Qwen model without opening Streamlit."""
+"""Exercise the actual catalog and local Qwen model without running the API."""
 
 import argparse
 import json

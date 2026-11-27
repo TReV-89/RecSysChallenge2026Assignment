@@ -5,12 +5,21 @@
 data/
 **/data/
 
+# This project intentionally versions the compact prepared TalkPlay tables.
+!prepared-dataset-eda/data/
+!prepared-dataset-eda/data/*.parquet
+!prepared-dataset-eda/data/*.json
+!prepared-dataset-eda/data/*.csv
+!prepared-dataset-eda/eda/*.csv
+prepared-dataset-eda/talkplay_static_eda.zip
+
 # Python cache & environments
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 .venv-stable/
+prepared-dataset-eda/.venv/
 venv/
 env/
 .ipynb_checkpoints/

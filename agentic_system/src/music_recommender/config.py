@@ -14,6 +14,7 @@ class Settings(BaseModel):
     groq_model: str = "openai/gpt-oss-20b"
     groq_reasoning_effort: Literal["low", "medium", "high"] | None = None
     llm_provider: Literal["groq", "openrouter"] = "groq"
+    explanation_provider: Literal["same", "openrouter"] = "openrouter"
     openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     openrouter_output_method: str = "function_calling"
     output_method: str = "json_schema"
@@ -23,8 +24,8 @@ class Settings(BaseModel):
     track_embedding_column: str = "metadata-qwen3_embedding_0.6b"
     dimension: int = 1024
     candidate_count: int = 24
-    neighbor_pool: int = 80
     neighbor_count: int = 8
+    cf_history_mode: Literal["official_test", "internal_validation"] = "official_test"
     max_output_tokens: int = 1200
 
     def api_key(self) -> str:
@@ -60,6 +61,7 @@ class Settings(BaseModel):
             embedding_model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"),
             embedding_device=os.getenv("EMBEDDING_DEVICE", "cpu"),
             embedding_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "8")),
+            cf_history_mode=os.getenv("CF_HISTORY_MODE", "official_test"),
             track_embedding_column=os.getenv(
                 "TRACK_EMBEDDING_COLUMN", "metadata-qwen3_embedding_0.6b"
             ),

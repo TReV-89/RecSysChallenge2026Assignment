@@ -258,7 +258,7 @@ def test_runner_saves_resumes_and_scores_without_regenerating(monkeypatch, tmp_p
             pass
 
         def state(self, key):
-            return {"ready": True, "scope": {"sample": False}, "identity": {}}.get(key)
+            return {"ready": True, "scope": {"sample": False}, "identity": {}, "cf_query_vectors_ready": True}.get(key)
 
         def counts(self):
             return {"tracks": 8}
@@ -285,18 +285,24 @@ def test_runner_saves_resumes_and_scores_without_regenerating(monkeypatch, tmp_p
                     ],
                     neighbors=[],
                     notices=[],
-                    mode="local",
+                    mode="groq",
                 )
             }
 
     monkeypatch.setattr("music_recommender.store.CatalogStore", Store)
     monkeypatch.setattr("music_recommender.agent.build_agent", lambda *args: Agent())
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    prepared_dir = tmp_path / "prepared"
+    prepared_dir.mkdir()
+    (prepared_dir / "conversation_interactions.parquet").write_bytes(b"fixture-history")
+    monkeypatch.setattr("music_recommender.cf_data.load_history", lambda *args: {"rows": 1})
     args = SimpleNamespace(
+        prepared_dir=prepared_dir,
         data_dir=data_dir,
         output=tmp_path / "run",
         sessions=1,
         seed=42,
-        mode="local",
+        mode="groq",
         delay=0,
         score_only=False,
         allow_fallbacks=False,

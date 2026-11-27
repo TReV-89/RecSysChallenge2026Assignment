@@ -1,0 +1,798 @@
+{
+  "overview": {
+    "sessions": 16199,
+    "users": 8720,
+    "tracks_catalog": 47071,
+    "music_turns": 129592,
+    "labeled_turns": 113393,
+    "positive_turns": 60069,
+    "positive_rate_labeled": 0.5297,
+    "catalog_coverage": 0.5554,
+    "sparsity": 0.99987,
+    "shared_user_fraction": 0.915
+  },
+  "session_split": [
+    {
+      "source_split": "test",
+      "sessions": 1000,
+      "users": 500
+    },
+    {
+      "source_split": "train",
+      "sessions": 15199,
+      "users": 8591
+    }
+  ],
+  "user_split": [
+    {
+      "user_split": "train_warm",
+      "users": 8591
+    },
+    {
+      "user_split": "test_warm",
+      "users": 400
+    },
+    {
+      "user_split": "test_cold",
+      "users": 100
+    }
+  ],
+  "year_counts": [
+    {
+      "year": 2006,
+      "source_split": "train",
+      "sessions": 6
+    },
+    {
+      "year": 2007,
+      "source_split": "train",
+      "sessions": 11
+    },
+    {
+      "year": 2008,
+      "source_split": "train",
+      "sessions": 50
+    },
+    {
+      "year": 2009,
+      "source_split": "train",
+      "sessions": 132
+    },
+    {
+      "year": 2010,
+      "source_split": "train",
+      "sessions": 260
+    },
+    {
+      "year": 2011,
+      "source_split": "train",
+      "sessions": 617
+    },
+    {
+      "year": 2012,
+      "source_split": "train",
+      "sessions": 1697
+    },
+    {
+      "year": 2013,
+      "source_split": "train",
+      "sessions": 1644
+    },
+    {
+      "year": 2014,
+      "source_split": "train",
+      "sessions": 1845
+    },
+    {
+      "year": 2015,
+      "source_split": "train",
+      "sessions": 1451
+    },
+    {
+      "year": 2016,
+      "source_split": "train",
+      "sessions": 1435
+    },
+    {
+      "year": 2017,
+      "source_split": "train",
+      "sessions": 2021
+    },
+    {
+      "year": 2018,
+      "source_split": "train",
+      "sessions": 4030
+    },
+    {
+      "year": 2019,
+      "source_split": "test",
+      "sessions": 561
+    },
+    {
+      "year": 2020,
+      "source_split": "test",
+      "sessions": 439
+    }
+  ],
+  "turn_feedback": [
+    {
+      "music_turn": 1,
+      "labeled": 16199,
+      "positives": 9292,
+      "positive_rate": 0.5736
+    },
+    {
+      "music_turn": 2,
+      "labeled": 16199,
+      "positives": 8829,
+      "positive_rate": 0.545
+    },
+    {
+      "music_turn": 3,
+      "labeled": 16199,
+      "positives": 8357,
+      "positive_rate": 0.5159
+    },
+    {
+      "music_turn": 4,
+      "labeled": 16199,
+      "positives": 8253,
+      "positive_rate": 0.5095
+    },
+    {
+      "music_turn": 5,
+      "labeled": 16199,
+      "positives": 8118,
+      "positive_rate": 0.5011
+    },
+    {
+      "music_turn": 6,
+      "labeled": 16199,
+      "positives": 8083,
+      "positive_rate": 0.499
+    },
+    {
+      "music_turn": 7,
+      "labeled": 16199,
+      "positives": 9137,
+      "positive_rate": 0.564
+    }
+  ],
+  "goal_stats": [
+    {
+      "goal_category": "A",
+      "users": 1039,
+      "labeled": 8015,
+      "positives": 4684,
+      "positive_rate": 0.5844
+    },
+    {
+      "goal_category": "D",
+      "users": 1127,
+      "labeled": 9030,
+      "positives": 4996,
+      "positive_rate": 0.5533
+    },
+    {
+      "goal_category": "H",
+      "users": 1894,
+      "labeled": 16310,
+      "positives": 9005,
+      "positive_rate": 0.5521
+    },
+    {
+      "goal_category": "F",
+      "users": 1035,
+      "labeled": 8274,
+      "positives": 4549,
+      "positive_rate": 0.5498
+    },
+    {
+      "goal_category": "C",
+      "users": 933,
+      "labeled": 7252,
+      "positives": 3886,
+      "positive_rate": 0.5359
+    },
+    {
+      "goal_category": "B",
+      "users": 1877,
+      "labeled": 16037,
+      "positives": 8432,
+      "positive_rate": 0.5258
+    },
+    {
+      "goal_category": "J",
+      "users": 1321,
+      "labeled": 11011,
+      "positives": 5758,
+      "positive_rate": 0.5229
+    },
+    {
+      "goal_category": "K",
+      "users": 1774,
+      "labeled": 14812,
+      "positives": 7609,
+      "positive_rate": 0.5137
+    },
+    {
+      "goal_category": "G",
+      "users": 1233,
+      "labeled": 10052,
+      "positives": 5149,
+      "positive_rate": 0.5122
+    },
+    {
+      "goal_category": "E",
+      "users": 1229,
+      "labeled": 9765,
+      "positives": 4868,
+      "positive_rate": 0.4985
+    },
+    {
+      "goal_category": "I",
+      "users": 362,
+      "labeled": 2835,
+      "positives": 1133,
+      "positive_rate": 0.3996
+    }
+  ],
+  "age_stats": [
+    {
+      "age_group": "10s",
+      "users": 1874,
+      "labeled": 31724,
+      "positives": 16286,
+      "positive_rate": 0.5134
+    },
+    {
+      "age_group": "20s",
+      "users": 5527,
+      "labeled": 63504,
+      "positives": 33855,
+      "positive_rate": 0.5331
+    },
+    {
+      "age_group": "30s",
+      "users": 1025,
+      "labeled": 14602,
+      "positives": 7996,
+      "positive_rate": 0.5476
+    },
+    {
+      "age_group": "40s",
+      "users": 220,
+      "labeled": 2660,
+      "positives": 1387,
+      "positive_rate": 0.5214
+    },
+    {
+      "age_group": "50s",
+      "users": 62,
+      "labeled": 658,
+      "positives": 385,
+      "positive_rate": 0.5851
+    },
+    {
+      "age_group": "60+",
+      "users": 12,
+      "labeled": 245,
+      "positives": 160,
+      "positive_rate": 0.6531
+    }
+  ],
+  "gender_stats": [
+    {
+      "gender": "female",
+      "users": 2440,
+      "labeled": 39333,
+      "positives": 20247,
+      "positive_rate": 0.5148
+    },
+    {
+      "gender": "male",
+      "users": 6280,
+      "labeled": 74060,
+      "positives": 39822,
+      "positive_rate": 0.5377
+    }
+  ],
+  "country_stats": [
+    {
+      "country_name": "United States",
+      "users": 1594
+    },
+    {
+      "country_name": "Brazil",
+      "users": 954
+    },
+    {
+      "country_name": "Poland",
+      "users": 864
+    },
+    {
+      "country_name": "United Kingdom",
+      "users": 654
+    },
+    {
+      "country_name": "Russia",
+      "users": 545
+    },
+    {
+      "country_name": "Germany",
+      "users": 508
+    },
+    {
+      "country_name": "Netherlands",
+      "users": 279
+    },
+    {
+      "country_name": "Australia",
+      "users": 255
+    },
+    {
+      "country_name": "Finland",
+      "users": 220
+    },
+    {
+      "country_name": "Sweden",
+      "users": 209
+    },
+    {
+      "country_name": "Canada",
+      "users": 173
+    },
+    {
+      "country_name": "Spain",
+      "users": 152
+    }
+  ],
+  "user_activity": {
+    "session_quantiles": {
+      "0.0": 1.0,
+      "0.5": 1.0,
+      "0.9": 3.0,
+      "0.99": 16.0,
+      "1.0": 30.0
+    },
+    "positive_track_quantiles": {
+      "0.0": 1.0,
+      "0.5": 6.0,
+      "0.9": 12.0,
+      "0.99": 42.0,
+      "1.0": 103.0
+    },
+    "sessions_histogram": [
+      {
+        "bin": "1",
+        "users": 5700
+      },
+      {
+        "bin": "2",
+        "users": 1971
+      },
+      {
+        "bin": "3",
+        "users": 504
+      },
+      {
+        "bin": "4-5",
+        "users": 231
+      },
+      {
+        "bin": "6-10",
+        "users": 118
+      },
+      {
+        "bin": "11+",
+        "users": 196
+      }
+    ],
+    "positive_tracks_histogram": [
+      {
+        "bin": "1",
+        "users": 896
+      },
+      {
+        "bin": "2-3",
+        "users": 1461
+      },
+      {
+        "bin": "4-5",
+        "users": 1254
+      },
+      {
+        "bin": "6-10",
+        "users": 3135
+      },
+      {
+        "bin": "11-20",
+        "users": 789
+      },
+      {
+        "bin": "21+",
+        "users": 255
+      }
+    ]
+  },
+  "catalog": {
+    "unique_positive_tracks": 26142,
+    "track_frequency": [
+      {
+        "frequency_bin": "1",
+        "tracks": 17011
+      },
+      {
+        "frequency_bin": "2-3",
+        "tracks": 6038
+      },
+      {
+        "frequency_bin": "4-10",
+        "tracks": 2581
+      },
+      {
+        "frequency_bin": "11-30",
+        "tracks": 484
+      },
+      {
+        "frequency_bin": "31+",
+        "tracks": 28
+      }
+    ],
+    "top_1pct_interaction_share": 0.1052,
+    "top_5pct_interaction_share": 0.2766,
+    "top_10pct_interaction_share": 0.3921,
+    "top_tags": [
+      {
+        "tag": "rock",
+        "tracks": 25720
+      },
+      {
+        "tag": "alternative",
+        "tracks": 17662
+      },
+      {
+        "tag": "pop",
+        "tracks": 15988
+      },
+      {
+        "tag": "alternative rock",
+        "tracks": 9270
+      },
+      {
+        "tag": "favorites",
+        "tracks": 8825
+      },
+      {
+        "tag": "electronic",
+        "tracks": 8647
+      },
+      {
+        "tag": "american",
+        "tracks": 8140
+      },
+      {
+        "tag": "metal",
+        "tracks": 8040
+      },
+      {
+        "tag": "indie",
+        "tracks": 8036
+      },
+      {
+        "tag": "awesome",
+        "tracks": 7312
+      },
+      {
+        "tag": "love",
+        "tracks": 7265
+      },
+      {
+        "tag": "hard rock",
+        "tracks": 7024
+      },
+      {
+        "tag": "seen live",
+        "tracks": 6321
+      },
+      {
+        "tag": "dance",
+        "tracks": 6230
+      },
+      {
+        "tag": "beautiful",
+        "tracks": 6107
+      }
+    ],
+    "top_positive_artists": [
+      {
+        "artist_name_primary": "Linkin Park",
+        "positive_turns": 688
+      },
+      {
+        "artist_name_primary": "Muse",
+        "positive_turns": 564
+      },
+      {
+        "artist_name_primary": "Red Hot Chili Peppers",
+        "positive_turns": 511
+      },
+      {
+        "artist_name_primary": "Boards of Canada",
+        "positive_turns": 500
+      },
+      {
+        "artist_name_primary": "AC/DC",
+        "positive_turns": 478
+      },
+      {
+        "artist_name_primary": "Green Day",
+        "positive_turns": 462
+      },
+      {
+        "artist_name_primary": "The Black Keys",
+        "positive_turns": 443
+      },
+      {
+        "artist_name_primary": "Coldplay",
+        "positive_turns": 439
+      },
+      {
+        "artist_name_primary": "The Beatles",
+        "positive_turns": 434
+      },
+      {
+        "artist_name_primary": "Britney Spears",
+        "positive_turns": 410
+      },
+      {
+        "artist_name_primary": "Gorillaz",
+        "positive_turns": 408
+      },
+      {
+        "artist_name_primary": "Foo Fighters",
+        "positive_turns": 386
+      }
+    ],
+    "popularity_outcome": [
+      {
+        "outcome": "Negative",
+        "count": 53324,
+        "mean": 48.36,
+        "median": 51.0
+      },
+      {
+        "outcome": "Positive",
+        "count": 60069,
+        "mean": 47.45,
+        "median": 50.0
+      }
+    ]
+  },
+  "metadata_quality": {
+    "missing_track_join_rows": 0,
+    "missing_track_join_fraction": 0.0,
+    "catalog_missing_track_name": 0,
+    "catalog_missing_artist_name": 0,
+    "catalog_missing_popularity": 0,
+    "catalog_zero_normalized_tags": 87,
+    "raw_tag_entries": 1576414,
+    "normalized_unique_tag_entries": 1538225,
+    "invalid_session_dates": 0,
+    "duplicate_session_ids": 0,
+    "duplicate_catalog_track_ids": 0,
+    "unlabeled_turns": 16199,
+    "unlabeled_turns_are_final_turns": true
+  },
+  "candidate_stats": {
+    "test_users": 500,
+    "min_candidates_per_user": 100,
+    "max_candidates_per_user": 100,
+    "candidate_partitions": {
+      "official_test_cold_with_vector": 25,
+      "official_test_warm": 371,
+      "popularity_fallback": 104
+    },
+    "neighbor_query_users": {
+      "test_cold_with_vector": 25,
+      "test_warm": 371,
+      "train": 8591
+    }
+  },
+  "evaluation": {
+    "similar_user": {
+      "precision@20": 0.008373626373626373,
+      "recall@20": 0.03744845630559916,
+      "ndcg@20": 0.026906451336754043,
+      "hit_rate@20": 0.10505494505494506,
+      "evaluated_users": 2275
+    },
+    "popularity_baseline": {
+      "precision@20": 0.003406593406593407,
+      "recall@20": 0.017377289377289377,
+      "ndcg@20": 0.010998360391495317,
+      "hit_rate@20": 0.04879120879120879,
+      "evaluated_users": 2275
+    },
+    "subgroups": [
+      {
+        "group_dimension": "age_group",
+        "group_value": "10s",
+        "users": 612,
+        "precision@20": 0.0089,
+        "recall@20": 0.0362,
+        "ndcg@20": 0.028,
+        "hit_rate@20": 0.1046
+      },
+      {
+        "group_dimension": "age_group",
+        "group_value": "20s",
+        "users": 1345,
+        "precision@20": 0.0084,
+        "recall@20": 0.0388,
+        "ndcg@20": 0.0279,
+        "hit_rate@20": 0.1078
+      },
+      {
+        "group_dimension": "age_group",
+        "group_value": "30s",
+        "users": 245,
+        "precision@20": 0.0069,
+        "recall@20": 0.0318,
+        "ndcg@20": 0.0195,
+        "hit_rate@20": 0.0857
+      },
+      {
+        "group_dimension": "age_group",
+        "group_value": "40s",
+        "users": 53,
+        "precision@20": 0.0057,
+        "recall@20": 0.0448,
+        "ndcg@20": 0.0211,
+        "hit_rate@20": 0.0943
+      },
+      {
+        "group_dimension": "age_group",
+        "group_value": "50s",
+        "users": 14,
+        "precision@20": 0.0071,
+        "recall@20": 0.0204,
+        "ndcg@20": 0.0127,
+        "hit_rate@20": 0.0714
+      },
+      {
+        "group_dimension": "age_group",
+        "group_value": "60+",
+        "users": 6,
+        "precision@20": 0.025,
+        "recall@20": 0.0754,
+        "ndcg@20": 0.0782,
+        "hit_rate@20": 0.5
+      },
+      {
+        "group_dimension": "gender",
+        "group_value": "female",
+        "users": 805,
+        "precision@20": 0.0083,
+        "recall@20": 0.039,
+        "ndcg@20": 0.0279,
+        "hit_rate@20": 0.1019
+      },
+      {
+        "group_dimension": "gender",
+        "group_value": "male",
+        "users": 1470,
+        "precision@20": 0.0084,
+        "recall@20": 0.0366,
+        "ndcg@20": 0.0264,
+        "hit_rate@20": 0.1068
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "A",
+        "users": 160,
+        "precision@20": 0.0088,
+        "recall@20": 0.0361,
+        "ndcg@20": 0.0242,
+        "hit_rate@20": 0.1187
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "B",
+        "users": 327,
+        "precision@20": 0.0083,
+        "recall@20": 0.0325,
+        "ndcg@20": 0.0264,
+        "hit_rate@20": 0.107
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "C",
+        "users": 140,
+        "precision@20": 0.0079,
+        "recall@20": 0.034,
+        "ndcg@20": 0.0282,
+        "hit_rate@20": 0.1071
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "D",
+        "users": 174,
+        "precision@20": 0.0167,
+        "recall@20": 0.0779,
+        "ndcg@20": 0.0525,
+        "hit_rate@20": 0.1897
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "E",
+        "users": 199,
+        "precision@20": 0.0058,
+        "recall@20": 0.0318,
+        "ndcg@20": 0.0209,
+        "hit_rate@20": 0.0704
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "F",
+        "users": 177,
+        "precision@20": 0.0107,
+        "recall@20": 0.0466,
+        "ndcg@20": 0.0362,
+        "hit_rate@20": 0.1243
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "G",
+        "users": 196,
+        "precision@20": 0.0125,
+        "recall@20": 0.0576,
+        "ndcg@20": 0.0364,
+        "hit_rate@20": 0.1429
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "H",
+        "users": 340,
+        "precision@20": 0.0074,
+        "recall@20": 0.0262,
+        "ndcg@20": 0.0216,
+        "hit_rate@20": 0.0941
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "I",
+        "users": 48,
+        "precision@20": 0.0042,
+        "recall@20": 0.0458,
+        "ndcg@20": 0.0224,
+        "hit_rate@20": 0.0625
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "J",
+        "users": 215,
+        "precision@20": 0.0042,
+        "recall@20": 0.0211,
+        "ndcg@20": 0.014,
+        "hit_rate@20": 0.0512
+      },
+      {
+        "group_dimension": "goal_category",
+        "group_value": "K",
+        "users": 299,
+        "precision@20": 0.0062,
+        "recall@20": 0.03,
+        "ndcg@20": 0.0217,
+        "hit_rate@20": 0.0903
+      }
+    ]
+  },
+  "leakage_checks": {
+    "test_sessions_in_internal_history": 0,
+    "validation_sessions_in_internal_history": 0,
+    "neighbor_pool_non_train_users": 0,
+    "cold_user_embedding_rows": 129,
+    "cold_user_nonempty_embeddings": 25
+  }
+}

@@ -14,6 +14,8 @@ DATASETS = {
     "users": ("talkpl-ai/TalkPlayData-Challenge-User-Metadata", "all_users"),
     "track_vectors": ("talkpl-ai/TalkPlayData-Challenge-Track-Embeddings", "all_tracks"),
     "user_vectors": ("talkpl-ai/TalkPlayData-Challenge-User-Embeddings", "train"),
+    "test_warm_user_vectors": ("talkpl-ai/TalkPlayData-Challenge-User-Embeddings", "test_warm"),
+    "test_cold_user_vectors": ("talkpl-ai/TalkPlayData-Challenge-User-Embeddings", "test_cold"),
 }
 
 
@@ -153,7 +155,7 @@ def ingest(settings: Settings, sample=False, loader=stream_dataset, embedder=Non
     print("Embedding training profiles and conversation goals locally with Qwen...", flush=True)
     for key, field in [("profiles", "profile_text"), ("goals", "goal")]:
         for batch in batches(sessions, settings.embedding_batch_size):
-            existing = set(store.vectors(key, [row["session_id"] for row in batch]))
+            existing = store.existing_vector_ids(key, [row["session_id"] for row in batch])
             selected = [row for row in batch if row[field] and row["session_id"] not in existing]
             if not selected:
                 continue
