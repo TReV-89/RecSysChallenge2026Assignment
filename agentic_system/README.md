@@ -1,5 +1,8 @@
 # TalkPlay music recommendation prototype
 
+For setup, prepared-data loading, no-judge runs, resuming, and metric interpretation,
+see [Evaluation README](EVALUATION_README.md).
+
 FastAPI recommendation API backed by Chroma, local Qwen embeddings, LangGraph, LangChain tools,
 Pydantic and Groq or OpenRouter. The default Groq model is `openai/gpt-oss-20b`, which Groq
 lists on its free plan. Free usage requires a Groq account/key and is subject to
