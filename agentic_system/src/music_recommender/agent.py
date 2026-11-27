@@ -276,7 +276,10 @@ def _explain(settings, llm, request: RecommendationRequest, ranked: list[RankedT
             for item in ranked
         ]
         system = SystemMessage(
-            content=MAIN_AGENT_PROMPT
+            content="You write catalog-grounded explanations for already ranked music recommendations. "
+            "Retrieval and ranking are complete. Return only the requested ExplanationDraft output; "
+            "do not request retrieval or ranking tool calls. Similarity scores are not probabilities. "
+            "Neighbor evidence is synthetic next-turn goal feedback, not proof of listening or liking. "
             + f"\nReturn exactly {len(ranked)} entries. Copy each supplied track_id exactly once. "
             "Copy cited_tags verbatim from that track's supplied tags, or use [] if none apply. Use at most 25 words and two tags per track. "
             "Return one short explanation per supplied track ID, in the supplied order, and cite "
