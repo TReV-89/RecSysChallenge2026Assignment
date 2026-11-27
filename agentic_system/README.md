@@ -11,9 +11,10 @@ account quotas. The application does not upgrade plans or switch models automati
 OpenRouter supports `nvidia/nemotron-3-ultra-550b-a55b:free`. Configure
 `OPEN_ROUTER_API_KEY` and `OPEN_ROUTER_MODEL` in `.env` (`OPENROUTER_API_KEY` and
 `OPENROUTER_MODEL` are also accepted). A blank model selects that Nemotron model.
-The app defaults to Groq for recommendations. OpenRouter credentials do not change
-that default; they are used separately for the Nemotron judge. Set `LLM_PROVIDER`
-explicitly to change the recommendation provider.
+The interactive app defaults to Groq for recommendations. OpenRouter credentials
+do not change that default; set `LLM_PROVIDER` explicitly to change the app's
+recommendation provider. The evaluation runner separately retries Groq-local
+fallbacks with the configured `:free` OpenRouter model.
 OpenRouter explanations use `function_calling` plus Pydantic validation because
 this model advertises tool calling, not JSON-schema response formatting.
 
@@ -268,9 +269,12 @@ Outputs remain under the ignored `data/` directory:
 - Optional judge checkpoint and manifest record the proxy's model, prompt and scores.
 
 Missing predictions, invalid IDs and duplicate predictions fail validation instead
-of being silently omitted. Recommendation-provider fallback stops the run with `last_failure.json`,
-preserving completed predictions; use `--allow-fallbacks` only for an intentionally
-mixed-mode experiment. A failed/incomplete run does not produce aggregate scores.
+of being silently omitted. In evaluation, a Groq-local fallback is retried using
+the configured `:free` OpenRouter model; both provider modes and retry notices are
+recorded per prediction. If the retry also falls back, the run stops with
+`last_failure.json`, preserving completed predictions. Use `--allow-fallbacks`
+only to accept local fallback results. A failed/incomplete run does not produce
+aggregate scores.
 The percentile bootstrap resamples complete sessions 2,000 times; its descriptive
 95% interval does not capture model randomness or repeated users across sessions.
 Degenerate samples return no interval. Compare systems on the same selected sessions:

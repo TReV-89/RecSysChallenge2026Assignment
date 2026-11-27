@@ -245,12 +245,15 @@ def test_agent_resolves_a_reference_from_resent_client_history(catalog):
 def test_provider_failure_yields_empty_recommendations_with_a_notice(catalog):
     settings, store, *_ = catalog
 
+    class ProviderError(RuntimeError):
+        status_code = 413
+
     class UnavailableLLM:
         def bind_tools(self, *args, **kwargs):
-            raise RuntimeError("Simulated rate limit")
+            raise ProviderError("Simulated request too large")
 
         def with_structured_output(self, *args, **kwargs):
-            raise RuntimeError("Simulated rate limit")
+            raise ProviderError("Simulated request too large")
 
     retriever = Retriever(settings, store, FakeEmbedder())
     response = build_agent(settings, retriever, UnavailableLLM()).invoke(
@@ -258,6 +261,7 @@ def test_provider_failure_yields_empty_recommendations_with_a_notice(catalog):
     )["response"]
     assert response.recommendations == []
     assert any("Agent tool loop unavailable" in notice for notice in response.notices)
+    assert any("HTTP 413" in notice for notice in response.notices)
     assert response.mode == "fallback"
 
 

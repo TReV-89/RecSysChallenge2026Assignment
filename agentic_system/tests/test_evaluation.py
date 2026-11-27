@@ -267,10 +267,27 @@ def test_runner_saves_resumes_and_scores_without_regenerating(monkeypatch, tmp_p
             return {item: {} for item in bundle["catalog_ids"]}
 
     calls = []
+    built_settings = []
+    fallback_requests = []
+    openrouter_failure_requests = []
 
     class Agent:
+        def __init__(self, mode, fail=False):
+            self.mode = mode
+            self.fail = fail
+
         def invoke(self, state):
-            calls.append(state["request"])
+            calls.append((self.mode, state["request"]))
+            if self.fail:
+                self.fail = False
+                return {
+                    "response": RecommendationResponse(
+                        recommendations=[],
+                        neighbors=[],
+                        notices=["Agent tool loop unavailable (APIStatusError, HTTP 413)."],
+                        mode="fallback",
+                    )
+                }
             return {
                 "response": RecommendationResponse(
                     recommendations=[
@@ -285,12 +302,21 @@ def test_runner_saves_resumes_and_scores_without_regenerating(monkeypatch, tmp_p
                     ],
                     neighbors=[],
                     notices=[],
-                    mode="groq",
+                    mode=self.mode,
                 )
             }
 
+    def build_agent(settings, *args):
+        built_settings.append(settings)
+        fail = settings.llm_provider == "groq" and bool(fallback_requests)
+        if fail:
+            fallback_requests.pop()
+        if settings.llm_provider == "openrouter" and openrouter_failure_requests:
+            fail = openrouter_failure_requests.pop()
+        return Agent(settings.llm_provider, fail)
+
     monkeypatch.setattr("music_recommender.store.CatalogStore", Store)
-    monkeypatch.setattr("music_recommender.agent.build_agent", lambda *args: Agent())
+    monkeypatch.setattr("music_recommender.agent.build_agent", build_agent)
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
     prepared_dir = tmp_path / "prepared"
     prepared_dir.mkdir()
@@ -309,6 +335,7 @@ def test_runner_saves_resumes_and_scores_without_regenerating(monkeypatch, tmp_p
         judge_model=None,
     )
     run(args)
+    assert built_settings[0].react_max_output_tokens == 512
     assert len(calls) == 8
     run(args)
     assert len(calls) == 8  # No regenerated provider calls on resume.
@@ -323,3 +350,130 @@ def test_runner_saves_resumes_and_scores_without_regenerating(monkeypatch, tmp_p
     args.allow_fallbacks = True
     with pytest.raises(ValueError, match="configuration/code changed"):
         run(args)
+
+    args.output = tmp_path / "fallback-run"
+    args.allow_fallbacks = False
+    fallback_requests.append(True)
+    openrouter_failure_requests.append(True)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setattr("music_recommender.agent.create_llm", lambda *args: None)
+    monkeypatch.setattr(
+        "music_recommender.evaluation.openrouter.require_turn_budget",
+        lambda *args, **kwargs: {"used": 0, "limit": 50, "remaining": 50},
+    )
+    calls_before_fallback = len(calls)
+    run(args)
+    assert len(calls) == calls_before_fallback + 10
+    fallback_rows = [
+        json.loads(line)
+        for line in (args.output / "checkpoint.jsonl").read_text().splitlines()
+    ]
+    assert fallback_rows[0]["mode"] == "openrouter"
+    assert "Groq failed; retried with OpenRouter" in fallback_rows[0]["notices"][0]
+    assert any(
+        "OpenRouter also fell back locally" in notice
+        for notice in fallback_rows[0]["notices"]
+    )
+
+    args.output = tmp_path / "local-run"
+    args.allow_fallbacks = True
+    fallback_requests.append(True)
+    local_fallback_requests = []
+
+    def no_openrouter_allowance(*args, **kwargs):
+        raise RuntimeError("OpenRouter allowance exhausted.")
+
+    def fake_local_fallback(settings, retriever, request, notices):
+        local_fallback_requests.append(request)
+        return RecommendationResponse(
+            recommendations=[
+                Recommendation(
+                    track=Track(track_id="music-1", title="Song", artists=["Artist"], tags=[]),
+                    score=1,
+                    explanation="Selected by local catalog retrieval.",
+                    supporting_users=[],
+                )
+            ],
+            neighbors=[],
+            notices=[*notices, "Used local fallback."],
+            mode="fallback",
+        )
+
+    monkeypatch.setattr(
+        "music_recommender.evaluation.openrouter.require_turn_budget",
+        no_openrouter_allowance,
+    )
+    monkeypatch.setattr(
+        "music_recommender.evaluate.local_fallback_response", fake_local_fallback
+    )
+    calls_before_local = len(calls)
+    run(args)
+    assert len(calls) == calls_before_local + 1
+    assert len(local_fallback_requests) == 8
+    local_rows = [
+        json.loads(line)
+        for line in (args.output / "checkpoint.jsonl").read_text().splitlines()
+    ]
+    assert len(local_rows) == 8
+    assert all(row["mode"] == "fallback" for row in local_rows)
+
+    args.output = tmp_path / "three-turn-run"
+    args.allow_fallbacks = False
+    args.turns_per_session = 3
+    calls_before_three_turns = len(calls)
+    run(args)
+    assert len(calls) == calls_before_three_turns + 3
+    three_turn_rows = [
+        json.loads(line)
+        for line in (args.output / "checkpoint.jsonl").read_text().splitlines()
+    ]
+    assert [row["turn_number"] for row in three_turn_rows] == [1, 2, 3]
+    three_turn_scores = json.loads((args.output / "scores.json").read_text())
+    assert three_turn_scores["turns"] == 3
+    assert three_turn_scores["evaluation_scope"] == "partial_session_public_test"
+
+
+def test_local_fallback_response_uses_catalog_candidates():
+    from types import SimpleNamespace
+
+    from music_recommender.evaluate import local_fallback_response
+    from music_recommender.schemas import Candidate, RecommendationRequest, RetrievalResult, Track
+
+    request = RecommendationRequest(message="quiet indie", limit=1)
+    retrieval = RetrievalResult(
+        query=request.message,
+        neighbors=[],
+        candidates=[
+            Candidate(
+                track=Track(
+                    track_id="quiet-track",
+                    title="Quiet Song",
+                    artists=["Artist"],
+                    tags=["indie"],
+                ),
+                query_score=0.9,
+                neighbor_score=0.0,
+                supporting_users=[],
+                source_ranks={"text": 1},
+            )
+        ],
+    )
+
+    class Retriever:
+        def retrieve_text(self, _request, query):
+            assert query == "quiet indie"
+            return retrieval
+
+        def merge_results(self, _request, _query, results):
+            assert results == [retrieval]
+            return retrieval
+
+    response = local_fallback_response(
+        SimpleNamespace(candidate_count=24),
+        Retriever(),
+        request,
+        ["Providers unavailable."],
+    )
+    assert response.mode == "fallback"
+    assert [item.track.track_id for item in response.recommendations] == ["quiet-track"]
+    assert "Used local retrieval" in response.notices[-1]

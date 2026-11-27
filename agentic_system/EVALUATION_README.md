@@ -2,8 +2,10 @@
 
 This guide evaluates the **merged `workI` ReAct recommendation agent**, using the
 training evidence in **`prepared-dataset-eda`** and the evaluation scripts on
-**`main`**. The commands use Groq for recommendations and explanations, with
-**LLM judging disabled**.
+**`main`**. Evaluation defaults to Groq for recommendations and explanations,
+with **LLM judging disabled**. If a Groq turn falls back locally, the evaluator
+retries that turn with the configured free OpenRouter model, then retries once
+more if OpenRouter itself returns a local fallback.
 
 Start with one complete session (eight turns). That checks the pipeline; it is
 too small to estimate overall recommendation quality reliably.
@@ -39,10 +41,14 @@ GROQ_REASONING_EFFORT=low
 LLM_PROVIDER=groq
 ```
 
-An OpenRouter, Orca Router, or Gemini key is **not needed** for the commands below.
-`--explanation-provider same` prevents explanations from switching to OpenRouter
-just because a router key exists. Always include `--no-judge`: the current CLI
-otherwise enables its configured judge by default.
+An OpenRouter key is optional while Groq succeeds, but automatic evaluation
+fallback requires `OPEN_ROUTER_API_KEY` or `OPENROUTER_API_KEY`. The fallback is
+limited to a model whose name ends in `:free`, and each fallback turn checks the
+daily request allowance first. This failover applies only to evaluation; the
+interactive API does not switch providers automatically.
+`--explanation-provider same` keeps explanations on the active provider.
+Always include `--no-judge`: the current CLI otherwise enables its configured
+judge by default.
 
 ## 2. Prepare the catalog and collaborative data
 
@@ -84,17 +90,18 @@ feedback, and test interaction rows are not supplied as retrieval evidence.
 Earlier recorded conversation turns are provided as context (*teacher-forced*
 evaluation), rather than replacing that context with the agent's own prior output.
 
-## 3. Run an eight-turn pilot without a judge
+## 3. Run a low-cost three-turn pilot without a judge
 
 Choose a **new output folder** for a new experiment. This example avoids the
 folders used by earlier runs:
 
 ```powershell
 $env:GROQ_REASONING_EFFORT = 'low'
-$evaluationOutput = 'data/evaluations/my-workI-pilot-01'
+$evaluationOutput = 'data/evaluations/my-workI-pilot-01-three-turn'
 
 .\.venv-stable\Scripts\python.exe -u -m music_recommender.evaluate `
   --sessions 1 `
+  --turns-per-session 3 `
   --seed 42 `
   --mode groq `
   --explanation-provider same `
@@ -104,10 +111,15 @@ $evaluationOutput = 'data/evaluations/my-workI-pilot-01'
   --output $evaluationOutput
 ```
 
-Keep the terminal open. Successful turns print `Completed N/8 turns (groq)`.
+Keep the terminal open. Successful turns print `Completed N/3 turns`.
 The runner saves each completed prediction before proceeding to the next turn.
 Do not run two processes against the same output directory. Concurrent runs also
 share the account's provider quota.
+The ReAct tool loop defaults to a 512-token output allowance to stay within
+Groq's request limits; explanation generation uses a separate 4096-token budget.
+The run manifest records both the Groq primary and OpenRouter fallback model.
+This pilot evaluates only the first three turns of one sampled session; its score
+is a partial-session check, not a full eight-turn evaluation.
 
 `--delay 60` pauses between complete turns, not between every internal agent call.
 The ReAct agent can make several calls per turn, so pacing does not guarantee
@@ -178,6 +190,7 @@ For a completed run, recompute the no-judge scores without regenerating predicti
 ```powershell
 .\.venv-stable\Scripts\python.exe -m music_recommender.evaluate `
   --sessions 1 --seed 42 --mode groq --no-judge --score-only `
+  --turns-per-session 3 `
   --output $evaluationOutput
 ```
 
@@ -188,12 +201,16 @@ Use the session count and seed originally used for that output directory.
 
 Once the pilot completes, rerun the generation command with a new output folder:
 
-| `--sessions` | Number of turns |
+| `--sessions` | Turns with default `--turns-per-session 8` |
 |---|---:|
 | `1` | 8 |
 | `10` | 80 |
 | `100` | 800 |
 | `0` | Full test split: currently 8,000 |
+
+Set `--turns-per-session 3` to evaluate only the first three turns of each
+selected session. This reduces provider calls but is not directly comparable to
+full-session metrics.
 
 Seed 42 makes sampling reproducible for the same dataset revision and sample size.
 The input snapshot is the definitive record of the sample used. Larger runs can
@@ -202,8 +219,10 @@ of requests; there is no fixed three-call cost per turn.
 
 ## Troubleshooting
 
-- **RateLimitError:** wait for the applicable quota reset, then resume. A larger
-  between-turn delay may help with per-minute limits but cannot remove daily caps.
+- **RateLimitError:** the evaluator tries the configured free OpenRouter model
+  after a Groq local fallback. If that model's allowance is low, the run stops
+  with its completed checkpoint; resume the same command after the allowance resets.
+  A larger between-turn delay may help with per-minute limits but cannot remove daily caps.
 - **BadRequestError / invalid explanation:** inspect `last_failure.json`. Tag
   corrections must use literal supplied tags and still pass per-track validation.
   Explanation generation has its own prompt, separate from ReAct tool selection.

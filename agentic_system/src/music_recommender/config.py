@@ -27,6 +27,7 @@ class Settings(BaseModel):
     neighbor_count: int = 8
     cf_history_mode: Literal["official_test", "internal_validation"] = "official_test"
     max_output_tokens: int = 1200
+    react_max_output_tokens: int | None = Field(default=None, ge=256)
 
     def api_key(self) -> str:
         """Read credentials only when needed; never store them in run manifests."""

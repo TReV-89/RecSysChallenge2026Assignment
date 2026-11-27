@@ -219,6 +219,12 @@ def parse_explanation_call(message) -> ExplanationDraft:
     return ExplanationDraft.model_validate(calls[0]["args"])
 
 
+def _error_label(exc: Exception) -> str:
+    status_code = getattr(exc, "status_code", None)
+    status = f", HTTP {status_code}" if isinstance(status_code, int) else ""
+    return f"{type(exc).__name__}{status}"
+
+
 def repair_schema(evidence):
     """Constrain repair output to supplied IDs and literal tags; validate per track afterward."""
     schema = ExplanationDraft.model_json_schema()
@@ -335,7 +341,7 @@ def _explain(settings, llm, request: RecommendationRequest, ranked: list[RankedT
     except Exception as exc:  # noqa: BLE001 - provider/parser boundary with explicit fallback
         detail = f" Detail: {exc}" if type(exc) is ValueError else ""
         notices.append(
-            f"Agent explanation unavailable ({type(exc).__name__}); used evidence templates.{detail}"
+            f"Agent explanation unavailable ({_error_label(exc)}); used evidence templates.{detail}"
         )
     return explanations, notices
 
@@ -351,6 +357,12 @@ class RecommendationAgent:
         self.settings = settings
         self.retriever = retriever
         self.llm = llm
+        # Keep the longer explanation budget separate from short tool decisions.
+        self.tool_llm = (
+            llm.model_copy(update={"max_tokens": settings.react_max_output_tokens})
+            if llm is not None and settings.react_max_output_tokens is not None
+            else llm
+        )
         self.prompt = prompt
         self.checkpointer = checkpointer
         # Read once at construction: credentials are not expected to change mid-process.
@@ -369,7 +381,7 @@ class RecommendationAgent:
         result_box: dict = {}
         tools = build_tools(self.retriever, request, collected, result_box)
         react = create_agent(
-            self.llm,
+            self.tool_llm,
             tools=tools,
             system_prompt=self.prompt,
             checkpointer=self.checkpointer,
@@ -391,7 +403,9 @@ class RecommendationAgent:
             if isinstance(final.content, str):
                 chat_text = final.content.strip()
         except Exception as exc:  # noqa: BLE001 - provider/tool-loop boundary
-            notices.append(f"Agent tool loop unavailable ({type(exc).__name__}); no recommendations produced.")
+            notices.append(
+                f"Agent tool loop unavailable ({_error_label(exc)}); no recommendations produced."
+            )
 
         if "ranked" not in result_box and collected:
             # The model retrieved candidates but stopped without calling rank_tracks

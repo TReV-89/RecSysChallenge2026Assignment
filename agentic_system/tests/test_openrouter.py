@@ -30,6 +30,18 @@ def test_same_provider_explanations_ignore_router_credentials(monkeypatch):
     assert used_settings is settings
 
 
+def test_react_budget_does_not_reduce_explanation_budget():
+    from music_recommender.agent import build_agent
+
+    settings = Settings(explanation_provider="same", max_output_tokens=4096,
+                        react_max_output_tokens=1024)
+    llm = create_llm(settings, "test-key")
+    agent = build_agent(settings, None, llm)
+    assert agent.tool_llm.max_tokens == 1024
+    assert agent.llm is llm
+    assert llm.max_tokens == 4096
+
+
 def test_explanation_llm_uses_a_dedicated_openrouter_client_when_configured(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("OPEN_ROUTER_API_KEY", "second-key")

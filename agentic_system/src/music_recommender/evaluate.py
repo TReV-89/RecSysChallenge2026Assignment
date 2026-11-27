@@ -24,6 +24,73 @@ def write_json(path: Path, value):
     temporary.replace(path)
 
 
+def check_openrouter_allowance(settings, output, completed_turns, total_turns):
+    from .evaluation.openrouter import require_turn_budget
+
+    try:
+        allowance = require_turn_budget(settings.api_key(), required=5)
+    except RuntimeError as exc:
+        write_json(
+            output / "run_status.json",
+            {
+                "status": "stopped",
+                "reason": str(exc),
+                "completed_turns": completed_turns,
+                "total_turns": total_turns,
+            },
+        )
+        raise
+    write_json(output / "allowance.json", allowance)
+
+
+def local_fallback_response(settings, retriever, request, notices):
+    from .agent import fallback_explanation
+    from .ranking import rank_candidates
+    from .schemas import Recommendation, RecommendationResponse
+
+    results = [retriever.retrieve_text(request, request.message)]
+    if request.user_id:
+        results.extend(
+            [retriever.retrieve_cf(request), retriever.retrieve_user_to_item(request)]
+        )
+    if request.reference_track_id:
+        from .tools.item_to_item import make_item_to_item_tool
+
+        collected = []
+        tool = make_item_to_item_tool(retriever, request, collected)
+        tool.invoke(
+            {
+                "track_id": request.reference_track_id,
+                "vector_space": "metadata",
+                "top_k": min(settings.candidate_count, 100),
+            }
+        )
+        results.extend(collected)
+    merged = retriever.merge_results(request, request.message, results)
+    ranked = rank_candidates(merged, request, [])
+    if not ranked:
+        raise ValueError("Local fallback could not retrieve any catalog candidates.")
+    return RecommendationResponse(
+        kind="recommendations",
+        message="Here are tracks that may fit your request.",
+        recommendations=[
+            Recommendation(
+                track=item.candidate.track,
+                score=item.score,
+                explanation=fallback_explanation(item),
+                supporting_users=item.candidate.supporting_users,
+            )
+            for item in ranked
+        ],
+        neighbors=merged.neighbors,
+        notices=[
+            *notices,
+            "Used local retrieval, deterministic ranking, and template explanations.",
+        ],
+        mode="fallback",
+    )
+
+
 def read_checkpoint(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -115,16 +182,24 @@ def load_inputs(settings, output, count, seed):
 
 def run(args):
     settings = Settings.from_env()
+    turns_per_session = getattr(args, "turns_per_session", 8)
+    if not 1 <= turns_per_session <= 8:
+        raise ValueError("Turn limit per session must be between 1 and 8.")
     settings.llm_provider = args.mode
     settings.explanation_provider = getattr(args, "explanation_provider", "same")
     settings.cf_history_mode = "official_test"
     settings.data_dir = (args.data_dir or settings.data_dir / "catalog").resolve()
     # Twenty explanations need more space than the interactive five-track default.
     settings.max_output_tokens = 4096
+    settings.react_max_output_tokens = getattr(args, "react_max_output_tokens", 512)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     bundle = load_inputs(settings, output, args.sessions, args.seed)
-    cases = [case for row in bundle["sessions"] for case in extract_cases(row)]
+    cases = [
+        case
+        for row in bundle["sessions"]
+        for case in extract_cases(row)[:turns_per_session]
+    ]
     catalog_ids = set(bundle["catalog_ids"])
     predictions_path = output / "checkpoint.jsonl"
     predictions = read_checkpoint(predictions_path)
@@ -167,6 +242,9 @@ def run(args):
             },
             "input_hash": digest(bundle),
             "mode": args.mode,
+            "turns_per_session": turns_per_session,
+            "fallback_provider": "openrouter" if args.mode == "groq" else None,
+            "fallback_model": settings.openrouter_model if args.mode == "groq" else None,
             "settings": settings.model_dump(mode="json"),
             "allow_fallbacks": args.allow_fallbacks,
             "source_hash": source_hash,
@@ -184,7 +262,12 @@ def run(args):
         if not settings.api_key():
             raise ValueError(f"API key is required for --mode {args.mode}.")
         llm = create_llm(settings, settings.api_key())
-        agent = build_agent(settings, Retriever(settings, store, LocalEmbedder(settings)), llm)
+        retriever = Retriever(settings, store, LocalEmbedder(settings))
+        agent = build_agent(settings, retriever, llm)
+        fallback_agent = None
+        fallback_settings = settings.model_copy(update={"llm_provider": "openrouter"})
+        groq_unavailable = False
+        openrouter_unavailable = False
         indexed = set(store.records("tracks"))
         write_json(
             output / "coverage.json",
@@ -201,24 +284,148 @@ def run(args):
             if case.key in completed:
                 continue
             if args.mode == "openrouter" and settings.openrouter_model.endswith(":free"):
-                from .evaluation.openrouter import require_turn_budget
+                check_openrouter_allowance(
+                    settings, output, len(predictions), len(cases)
+                )
+            started = time.monotonic()
+            used_local_fallback = False
+            if (
+                args.mode == "groq"
+                and args.allow_fallbacks
+                and groq_unavailable
+                and openrouter_unavailable
+            ):
+                response = local_fallback_response(
+                    settings,
+                    retriever,
+                    case.request,
+                    ["Groq and OpenRouter are unavailable for this run."],
+                )
+                used_local_fallback = True
+            else:
+                response = agent.invoke(
+                    {"request": case.request, "notices": []}
+                )["response"]
+            if (
+                response.mode == "fallback"
+                and args.mode == "groq"
+                and not used_local_fallback
+            ):
+                groq_notices = response.notices
+                groq_unavailable = True
 
-                try:
-                    allowance = require_turn_budget(settings.api_key(), required=5)
-                except RuntimeError as exc:
+                def stop_or_use_local(reason, prior_notices, failed_case):
+                    if args.allow_fallbacks:
+                        return local_fallback_response(
+                            settings,
+                            retriever,
+                            failed_case.request,
+                            [*prior_notices, reason],
+                        )
                     write_json(
                         output / "run_status.json",
                         {
                             "status": "stopped",
-                            "reason": str(exc),
+                            "reason": reason,
                             "completed_turns": len(predictions),
                             "total_turns": len(cases),
                         },
                     )
-                    raise
-                write_json(output / "allowance.json", allowance)
-            started = time.monotonic()
-            response = agent.invoke({"request": case.request, "notices": []})["response"]
+                    write_json(
+                        output / "last_failure.json",
+                        {
+                            "session_id": failed_case.session_id,
+                            "turn_number": failed_case.turn_number,
+                            "notices": [*prior_notices, reason],
+                        },
+                    )
+                    raise RuntimeError(reason)
+
+                reason = None
+                if not fallback_settings.openrouter_model.endswith(":free"):
+                    reason = (
+                        "Automatic OpenRouter fallback requires a configured :free model "
+                        "to avoid unexpected charges."
+                    )
+                elif not fallback_settings.api_key():
+                    reason = (
+                        "OPENROUTER_API_KEY (or OPEN_ROUTER_API_KEY) is required "
+                        "for automatic fallback."
+                    )
+                if reason:
+                    response = stop_or_use_local(reason, groq_notices, case)
+                    used_local_fallback = args.allow_fallbacks
+                    openrouter_unavailable = True
+                else:
+                    try:
+                        check_openrouter_allowance(
+                            fallback_settings, output, len(predictions), len(cases)
+                        )
+                    except RuntimeError as exc:
+                        openrouter_unavailable = True
+                        response = stop_or_use_local(str(exc), groq_notices, case)
+                        used_local_fallback = args.allow_fallbacks
+                    else:
+                        if fallback_agent is None:
+                            fallback_llm = create_llm(
+                                fallback_settings, fallback_settings.api_key()
+                            )
+                            fallback_agent = build_agent(
+                                fallback_settings, retriever, fallback_llm
+                            )
+                        response = fallback_agent.invoke(
+                            {"request": case.request, "notices": []}
+                        )["response"]
+                if not used_local_fallback and response.mode == "fallback":
+                    openrouter_notices = response.notices
+                    try:
+                        check_openrouter_allowance(
+                            fallback_settings, output, len(predictions), len(cases)
+                        )
+                    except RuntimeError as exc:
+                        openrouter_unavailable = True
+                        response = stop_or_use_local(
+                            str(exc), [*groq_notices, *openrouter_notices], case
+                        )
+                        used_local_fallback = args.allow_fallbacks
+                    if not used_local_fallback:
+                        retry = fallback_agent.invoke(
+                            {"request": case.request, "notices": []}
+                        )["response"]
+                        response = retry.model_copy(
+                            update={
+                                "notices": [
+                                    "OpenRouter also fell back locally; retried this turn once.",
+                                    *openrouter_notices,
+                                    *retry.notices,
+                                ]
+                            }
+                        )
+                    if (
+                        args.allow_fallbacks
+                        and response.mode == "fallback"
+                        and not response.recommendations
+                    ):
+                        response = local_fallback_response(
+                            settings,
+                            retriever,
+                            case.request,
+                            [*groq_notices, *response.notices],
+                        )
+                        used_local_fallback = True
+                if not used_local_fallback:
+                    response = response.model_copy(
+                        update={
+                            "notices": [
+                                (
+                                    "Groq failed; retried with "
+                                    f"OpenRouter ({fallback_settings.openrouter_model})."
+                                ),
+                                *groq_notices,
+                                *response.notices,
+                            ]
+                        }
+                    )
             if response.mode == "fallback" and not args.allow_fallbacks:
                 write_json(
                     output / "run_status.json",
@@ -286,11 +493,15 @@ def run(args):
             for row in predictions
         ],
     )
+    all_sessions = len(bundle["sessions"]) == bundle["total_test_sessions"]
     scores["evaluation_scope"] = (
         "full_public_test"
-        if len(bundle["sessions"]) == bundle["total_test_sessions"]
+        if all_sessions and turns_per_session == 8
+        else "partial_session_public_test"
+        if all_sessions
         else "sampled_public_test"
     )
+    scores["turn_scope"] = f"First {turns_per_session} turns per sampled session."
     scores["protocol"] = (
         "Teacher-forced previous turns; no goals, specificity, thoughts or future answers."
     )
@@ -357,6 +568,12 @@ def main():
     parser.add_argument(
         "--sessions", type=int, default=100, help="Random complete sessions; 0 means all."
     )
+    parser.add_argument(
+        "--turns-per-session",
+        type=int,
+        default=8,
+        help="Evaluate only the first 1-8 turns per sampled session.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mode", choices=["groq", "openrouter"], default="groq")
     parser.add_argument("--data-dir", type=Path)
@@ -367,6 +584,10 @@ def main():
     )
     parser.add_argument("--explanation-provider", choices=["same", "openrouter"], default="same")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--react-max-output-tokens", type=int, default=512,
+        help="Output-token allowance per ReAct call; explanations retain 4096 tokens.",
+    )
     parser.add_argument(
         "--delay", type=float, default=0, help="Seconds between recommendation turns."
     )
@@ -395,6 +616,10 @@ def main():
     args = parser.parse_args()
     if args.sessions < 0 or args.delay < 0:
         parser.error("Sessions and delay must be nonnegative.")
+    if not 1 <= args.turns_per_session <= 8:
+        parser.error("Turns per session must be between 1 and 8.")
+    if args.react_max_output_tokens < 256:
+        parser.error("ReAct output allowance must be at least 256 tokens.")
     try:
         run(args)
     except (ValueError, RuntimeError) as exc:
