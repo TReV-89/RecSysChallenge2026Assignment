@@ -370,15 +370,24 @@ missing/duplicate/unexpected IDs are now reported explicitly. The four-request
 upper bound includes this correction. Current retry artifacts use
 `data/evaluations/openrouter-nemotron-test-100-v3`.
 
-### Corrected model roles
+### Current evaluation: Groq without a judge
 
-The intended evaluation uses Groq (`GROQ_MODEL`) for recommendations and OpenRouter
-Nemotron (`OPEN_ROUTER_MODEL`) as an independent text-only judge. Use a new output
-directory such as `data/evaluations/groq-nemotron-test-100` when generating this
-baseline; earlier `openrouter-nemotron-*` runs used Nemotron as the recommender and
-must not be relabeled as Groq results. The official challenge uses a private Gemini
-judge, so our Nemotron score and composite are explicitly local proxies.
+The current baseline uses Groq (`GROQ_MODEL`) for recommendations and skips LLM
+judging. Report nDCG@1/10/20, catalog diversity, Distinct-2 and the weighted subtotal
+out of 0.70. This is not the full challenge composite.
+
+On the current limited plan, start with one complete eight-turn session. The
+GPT-OSS `low` reasoning setting and concise explanations reduce token usage.
+The agent retries transient Groq failures at most twice; pacing between turns
+does not bypass per-minute or daily limits. Checkpoints allow an identical run to
+resume. Earlier Nemotron recommendation runs are not Groq evaluation results.
 
 ```powershell
-.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate --sessions 100 --seed 42 --mode groq --output data/evaluations/groq-nemotron-test-100
+$env:GROQ_REASONING_EFFORT='low'
+.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate --sessions 1 --seed 42 --mode groq --no-judge --delay 60 --output data/evaluations/groq-pilot-tag-fix
 ```
+
+Tag correction requests constrain their JSON schema to supplied track IDs and
+literal tag strings. Errors identify unsupported citations, and repaired entries
+still undergo per-track validation, including rejection of tags borrowed from
+another track. No unsupported tags are silently removed or accepted.

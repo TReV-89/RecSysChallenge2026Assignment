@@ -208,6 +208,15 @@ def run(args):
             response = agent.invoke({"request": case.request, "notices": []})["response"]
             if args.mode != "local" and response.mode == "fallback" and not args.allow_fallbacks:
                 write_json(
+                    output / "run_status.json",
+                    {
+                        "status": "stopped",
+                        "reason": "Provider or output validation failure; see last_failure.json.",
+                        "completed_turns": len(predictions),
+                        "total_turns": len(cases),
+                    },
+                )
+                write_json(
                     output / "last_failure.json",
                     {
                         "session_id": case.session_id,

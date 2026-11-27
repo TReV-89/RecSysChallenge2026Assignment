@@ -12,6 +12,7 @@ class Settings(BaseModel):
     data_dir: Path = PROJECT_ROOT / "data"
     cache_dir: Path = PROJECT_ROOT / ".cache"
     groq_model: str = "openai/gpt-oss-20b"
+    groq_reasoning_effort: Literal["low", "medium", "high"] | None = None
     llm_provider: Literal["groq", "openrouter"] = "groq"
     openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     openrouter_output_method: str = "function_calling"
@@ -54,6 +55,7 @@ class Settings(BaseModel):
             or "nvidia/nemotron-3-ultra-550b-a55b:free",
             openrouter_output_method=os.getenv("OPENROUTER_OUTPUT_METHOD") or "function_calling",
             groq_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+            groq_reasoning_effort=os.getenv("GROQ_REASONING_EFFORT") or None,
             output_method=os.getenv("GROQ_OUTPUT_METHOD", "json_schema"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"),
             embedding_device=os.getenv("EMBEDDING_DEVICE", "cpu"),
