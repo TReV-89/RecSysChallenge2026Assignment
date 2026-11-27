@@ -79,32 +79,7 @@ class RecommendationResponse(StrictModel):
     recommendations: list[Recommendation]
     neighbors: list[Neighbor]
     notices: list[str]
-    mode: Literal["groq", "openrouter", "local", "fallback"]
-
-
-class RouteDecision(StrictModel):
-    route: Literal["chat", "recommendations"]
-    use_item_to_item: bool = False
-
-
-class SearchArguments(StrictModel):
-    query: str = Field(
-        min_length=1,
-        max_length=2000,
-        description="Music search incorporating current request and relevant prior preferences.",
-    )
-
-
-class ItemSearchArguments(StrictModel):
-    track_id: str = Field(min_length=1, description="Known catalog track ID from the conversation.")
-    vector_space: Literal["metadata", "cf"]
-    top_k: int = Field(ge=1, le=100)
-
-
-class RankingArguments(StrictModel):
-    exclude_track_ids: list[str] = Field(
-        description="Candidate IDs clearly conflicting with the user's explicit preferences. Empty if none."
-    )
+    mode: Literal["groq", "openrouter", "fallback"]
 
 
 class TrackExplanation(StrictModel):

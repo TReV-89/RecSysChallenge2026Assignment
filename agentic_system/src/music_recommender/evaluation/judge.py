@@ -37,7 +37,7 @@ class JudgeScore(StrictModel):
 def judge_response(request, response: str, model: str, api_key: str) -> JudgeScore:
     if not re.fullmatch(r"[a-zA-Z0-9._:/-]+", model) or "://" in model:
         raise ValueError("Supply an OpenRouter model ID, not a URL.")
-    from ..agent import user_context
+    from ..agent import request_context
     from .openrouter import require_turn_budget
 
     if model.endswith(":free"):
@@ -50,7 +50,7 @@ def judge_response(request, response: str, model: str, api_key: str) -> JudgeSco
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "listener_context": json.loads(user_context(request)),
+                        "listener_context": request_context(request),
                         "response": response,
                     },
                     ensure_ascii=False,

@@ -3,9 +3,33 @@ from io import BytesIO
 
 import pytest
 
-from music_recommender.agent import create_llm, explanation_chain, parse_explanation_call
+from music_recommender.agent import (
+    create_explanation_llm,
+    create_llm,
+    explanation_chain,
+    parse_explanation_call,
+)
 from music_recommender.config import Settings
 from music_recommender.evaluation.openrouter import require_turn_budget
+
+
+def test_explanation_llm_falls_back_to_main_loop_without_a_second_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPEN_ROUTER_API_KEY", raising=False)
+    settings = Settings(llm_provider="groq")
+    llm, used_settings = create_explanation_llm(settings)
+    assert llm is None
+    assert used_settings is settings
+
+
+def test_explanation_llm_uses_a_dedicated_openrouter_client_when_configured(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPEN_ROUTER_API_KEY", "second-key")
+    settings = Settings(llm_provider="groq")  # main loop stays on Groq
+    llm, used_settings = create_explanation_llm(settings)
+    assert used_settings.llm_provider == "openrouter"
+    assert llm.model_name == settings.openrouter_model
+    assert llm.openai_api_base == "https://openrouter.ai/api/v1"
 
 
 def test_judge_credentials_do_not_switch_recommendation_provider(monkeypatch):
@@ -31,12 +55,12 @@ def test_judge_credentials_do_not_switch_recommendation_provider(monkeypatch):
     assert Settings.from_env().api_key() == "test-groq-key"
 
 
-def test_openrouter_client_uses_requested_endpoint_and_no_retries():
+def test_openrouter_client_uses_requested_endpoint_with_bounded_retries():
     settings = Settings(llm_provider="openrouter")
     llm = create_llm(settings, "test-key")
     assert llm.model_name == settings.openrouter_model
     assert llm.openai_api_base == "https://openrouter.ai/api/v1"
-    assert llm.max_retries == 0
+    assert llm.max_retries == 2  # bounded backoff for transient rate limits, not unlimited
     assert llm.use_responses_api is False
     chain = explanation_chain(settings, llm)
     assert "parallel_tool_calls" not in chain.first.kwargs
@@ -55,10 +79,10 @@ def test_openrouter_explanations_require_exactly_one_valid_call():
 
 @pytest.mark.parametrize("repair_succeeds", [True, False])
 def test_explanation_repair_is_validated_and_bounded(monkeypatch, repair_succeeds):
-    from langchain_core.messages import AIMessage
     from langchain_core.runnables import RunnableLambda
 
-    from music_recommender.agent import build_agent
+    from music_recommender.agent import _explain
+    from music_recommender.ranking import rank_candidates
     from music_recommender.schemas import (
         Candidate,
         ExplanationDraft,
@@ -68,33 +92,20 @@ def test_explanation_repair_is_validated_and_bounded(monkeypatch, repair_succeed
         TrackExplanation,
     )
 
-    class Retriever:
-        def retrieve(self, request, query):
-            return RetrievalResult(
-                query=query,
-                neighbors=[],
-                candidates=[
-                    Candidate(
-                        track=Track(track_id="t", title="Song", artists=[], tags=[]),
-                        query_score=0.8,
-                        neighbor_score=0,
-                        supporting_users=[],
-                    )
-                ],
+    retrieval = RetrievalResult(
+        query="calm",
+        neighbors=[],
+        candidates=[
+            Candidate(
+                track=Track(track_id="t", title="Song", artists=[], tags=[]),
+                query_score=0.8,
+                neighbor_score=0,
+                supporting_users=[],
             )
-
-    class LLM:
-        def bind_tools(self, tools, tool_choice):
-            args = (
-                {"query": "calm"}
-                if tool_choice == "retrieve_candidates"
-                else {"exclude_track_ids": []}
-            )
-            return RunnableLambda(
-                lambda messages: AIMessage(
-                    content="", tool_calls=[{"name": tool_choice, "args": args, "id": "call"}]
-                )
-            )
+        ],
+    )
+    request = RecommendationRequest(message="calm")
+    ranked = rank_candidates(retrieval, request, [])
 
     calls = []
 
@@ -110,13 +121,13 @@ def test_explanation_repair_is_validated_and_bounded(monkeypatch, repair_succeed
     monkeypatch.setattr(
         "music_recommender.agent.explanation_chain", lambda *args: RunnableLambda(explain)
     )
-    response = build_agent(Settings(llm_provider="openrouter"), Retriever(), LLM()).invoke(
-        {"request": RecommendationRequest(message="calm")}
-    )["response"]
+    explanations, notices = _explain(Settings(llm_provider="openrouter"), object(), request, ranked)
     assert len(calls) == 2
     assert "missing=['t']" in calls[1][-1].content
-    assert response.mode == ("openrouter" if repair_succeeds else "fallback")
-    assert response.recommendations[0].score == 0.8
+    assert bool(notices) == (not repair_succeeds)
+    assert ranked[0].score == 0.8
+    if repair_succeeds:
+        assert explanations["t"] == "Fits."
 
 
 @pytest.mark.parametrize("remaining", [0, 1, 2, 3, 4, 50])

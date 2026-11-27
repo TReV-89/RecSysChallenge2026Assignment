@@ -1,35 +1,25 @@
-"""Agent tool for candidate tracks supported by similar training users."""
+"""User-to-user (CF-BPR neighbor pooling) retrieval tool, scoped to one turn."""
 
-from typing import Annotated
+from langchain_core.tools import tool
 
-from langchain_core.tools import InjectedToolArg, tool
-
-from ..schemas import RecommendationRequest, RetrievalResult
+from ._common import as_tool_content, summarize_candidates
 
 
-@tool
-def retrieve_user_to_user_candidates(
-    request: Annotated[RecommendationRequest, InjectedToolArg],
-    retriever: Annotated[object, InjectedToolArg],
-) -> RetrievalResult:
-    """Find tracks supported by similar users' eligible training feedback.
+def make_retrieve_user_to_user_tool(retriever, request, collected: list):
+    @tool
+    def retrieve_user_to_user_candidates() -> str:
+        """Find tracks supported by similar listeners' eligible training feedback.
 
-    Call for a recommendation request when the application has a user ID and
-    a CF-BPR vector for that listener. The application supplies the listener
-    identity and data; do not guess or substitute a user ID. Similarity uses
-    the prepared CF-BPR user vectors. A track receives support only from
-    eligible positive feedback in the training conversations.
+        Only use when the listener context below gives a listener ID with a
+        CF-BPR vector. Takes no arguments.
 
-    Args:
-        request: Application-provided listener identity and excluded tracks.
-        retriever: Application-provided CF retriever and prepared data access.
-            The model cannot set either argument.
+        Returns:
+            Catalog tracks supported by similar listeners' positive feedback,
+            each with track_id, title, artists, tags; may be empty. Predicted
+            affinity from a synthetic conversation, never a confirmed like.
+        """
+        result = retriever.retrieve_cf(request)
+        collected.append(result)
+        return as_tool_content(summarize_candidates(result))
 
-    Returns:
-        RetrievalResult containing similar training users and catalog-backed
-        candidate tracks ordered by their neighbor support. Each candidate
-        has a user-to-user source rank and bounded supporting-user evidence.
-        The result is empty when the listener has no usable CF-BPR vector or
-        no eligible neighbor tracks. Feedback is not a recorded listen or like.
-    """
-    return retriever.retrieve_cf(request)
+    return retrieve_user_to_user_candidates

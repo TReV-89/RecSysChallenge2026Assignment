@@ -44,6 +44,28 @@ class Retriever:
     def _empty(query: str = "") -> RetrievalResult:
         return RetrievalResult(query=query, neighbors=[], candidates=[])
 
+    def _query_cf_vector(self, request: RecommendationRequest):
+        """Use a published test factor when present, otherwise a training factor."""
+        if not request.user_id:
+            return None
+        query_record = (
+            self.store.records("cf_query_vectors", [request.user_id]).get(request.user_id)
+            if self.store.state("cf_query_vectors_ready")
+            else None
+        )
+        if query_record is not None:
+            return query_record["vector"]
+        return self.store.vectors("users_cf", [request.user_id]).get(request.user_id)
+
+    def _excluded_cf_tracks(self, request: RecommendationRequest) -> set[str]:
+        excluded = set(request.excluded_track_ids)
+        history_kind = "cf_history_" + self.settings.cf_history_mode
+        if request.user_id and self.store.state(f"{history_kind}_ready"):
+            own_history = self.store.records(history_kind, [request.user_id]).get(request.user_id)
+            if own_history:
+                excluded.update(own_history["track_ids"])
+        return excluded
+
     def retrieve_text(self, request: RecommendationRequest, query: str) -> RetrievalResult:
         """Find tracks matching the current description in Qwen metadata space."""
         self._require_catalog()
@@ -78,25 +100,14 @@ class Retriever:
         history_kind = "cf_history_" + self.settings.cf_history_mode
         if not request.user_id or not self.store.state(f"{history_kind}_ready"):
             return self._empty()
-        query_record = (
-            self.store.records("cf_query_vectors", [request.user_id]).get(request.user_id)
-            if self.store.state("cf_query_vectors_ready")
-            else None
-        )
-        user_vector = (
-            query_record["vector"]
-            if query_record is not None
-            else self.store.vectors("users_cf", [request.user_id]).get(request.user_id)
-        )
+        user_vector = self._query_cf_vector(request)
         if user_vector is None:
             return self._empty()
         if self._training_cf_vectors is None:
             self._training_cf_vectors = self.store.all_vectors("users_cf")
         matches = find_cf_neighbors(request.user_id, user_vector, self._training_cf_vectors)
         histories = self.store.records(history_kind, [user_id for user_id, _ in matches])
-        own_history = self.store.records(history_kind, [request.user_id]).get(request.user_id)
-        seen = set(own_history["track_ids"]) if own_history else set()
-        excluded = seen | set(request.excluded_track_ids)
+        excluded = self._excluded_cf_tracks(request)
         support_scores: dict[str, float] = {}
         supporters: dict[str, list[SupportingUser]] = {}
         neighbors = []
@@ -140,6 +151,37 @@ class Retriever:
                 )
             )
         return RetrievalResult(query="", neighbors=neighbors, candidates=candidates)
+
+    def retrieve_user_to_item(self, request: RecommendationRequest) -> RetrievalResult:
+        """Rank catalog tracks by inner product with the user's CF-BPR factor."""
+        self._require_catalog()
+        user_vector = self._query_cf_vector(request)
+        if user_vector is None:
+            return self._empty()
+        collection = self.store.collections["tracks_cf"]
+        count = collection.count()
+        if not count:
+            return self._empty()
+        excluded = self._excluded_cf_tracks(request)
+        fetch_count = min(count, max(1, self.settings.candidate_count * 2))
+        while True:
+            ids = self.store.search("tracks_cf", user_vector, fetch_count)
+            rows = self.store.records("tracks", ids)
+            eligible = [track_id for track_id in ids if track_id in rows and track_id not in excluded]
+            if len(eligible) >= self.settings.candidate_count or fetch_count == count:
+                break
+            fetch_count = min(count, fetch_count * 2)
+        candidates = [
+            Candidate(
+                track=track_from_row(rows[track_id]),
+                query_score=0.0,
+                neighbor_score=0.0,
+                supporting_users=[],
+                source_ranks={"user_to_item": rank},
+            )
+            for rank, track_id in enumerate(eligible[: self.settings.candidate_count], 1)
+        ]
+        return RetrievalResult(query="", neighbors=[], candidates=candidates)
 
     def item_candidates(
         self, request: RecommendationRequest, ids: list[str], vector_space: str
@@ -208,5 +250,7 @@ class Retriever:
     def retrieve(self, request: RecommendationRequest, query: str) -> RetrievalResult:
         """Compatibility entry point for evaluation and non-graph callers."""
         return self.merge_results(
-            request, query, [self.retrieve_text(request, query), self.retrieve_cf(request)]
+            request, query,
+            [self.retrieve_text(request, query), self.retrieve_cf(request),
+             self.retrieve_user_to_item(request)],
         )

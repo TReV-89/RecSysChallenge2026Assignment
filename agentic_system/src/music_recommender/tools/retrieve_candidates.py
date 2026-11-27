@@ -1,34 +1,31 @@
-"""Catalog search tool, with the request supplied by the application."""
+"""Text-to-item catalog search tool, scoped to one request's ReAct turn."""
 
 from typing import Annotated
 
-from langchain_core.tools import InjectedToolArg, tool
+from langchain_core.tools import tool
 from pydantic import Field
 
-from ..schemas import RecommendationRequest, RetrievalResult
+from ._common import as_tool_content, summarize_candidates
 
 
-@tool
-def retrieve_candidates(
-    query: Annotated[str, Field(min_length=1, max_length=2000)],
-    request: Annotated[RecommendationRequest, InjectedToolArg],
-    retriever: Annotated[object, InjectedToolArg],
-) -> RetrievalResult:
-    """Find catalog tracks matching the listener's current music description.
+def make_retrieve_candidates_tool(retriever, request, collected: list):
+    @tool
+    def retrieve_candidates(
+        query: Annotated[str, Field(min_length=1, max_length=2000)],
+    ) -> str:
+        """Find catalog tracks from a text description (mood, genre, artist, activity).
 
-    Args:
-        query: Music search incorporating the latest request, relevant prior
-            preferences and dislikes. Use at most 2,000 characters.
-        request: Application-provided listener context and exclusions.
-        retriever: Application-provided catalog retriever. The model cannot
-            set or change either application argument.
+        May be called again with different phrasing if results were a poor fit.
 
-    Returns:
-        RetrievalResult with query and catalog-backed candidates ranked by
-        metadata similarity. Each candidate includes its track ID, title,
-        artists, tags and text source rank. This tool does not calculate
-        user similarity. It may return an empty candidate list.
-    """
-    if hasattr(retriever, "retrieve_text"):
-        return retriever.retrieve_text(request, query)
-    return retriever.retrieve(request, query)
+        Args:
+            query: Search text (request + relevant preferences), max 2000 chars.
+
+        Returns:
+            Up to the candidate count, each with track_id, title, artists,
+            tags; may be empty. These track_ids are catalog-grounded.
+        """
+        result = retriever.retrieve_text(request, query)
+        collected.append(result)
+        return as_tool_content(summarize_candidates(result))
+
+    return retrieve_candidates

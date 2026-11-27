@@ -113,9 +113,11 @@ flowchart LR
     Route -- "music request" --> Retrieve["Retrieve candidate sources"]
     Retrieve --> Text["retrieve_candidates: Qwen text candidates"]
     Retrieve --> CF["retrieve_user_to_user_candidates: CF-BPR neighbors and eligible feedback"]
+    Retrieve --> Direct["retrieve_user_to_item_candidates: user and track CF-BPR factors"]
     Retrieve --> Item["item_to_item_similarity: known catalog track"]
     Text --> Merge["Track-ID merge and reciprocal-rank fusion"]
     CF --> Merge
+    Direct --> Merge
     Item --> Merge
     Merge --> Rank["rank_tracks"]
     Rank --> Explain["Evidence-checked explanations"]
@@ -132,8 +134,9 @@ The graph first routes each turn. Clear greetings are handled locally without
 retrieval. With a configured LLM, ambiguous turns receive a bounded route
 decision; the conversational branch can answer without calling music tools.
 Recommendation turns use the text `retrieve_candidates` tool, call
-`retrieve_user_to_user_candidates` when a listener ID is supplied, optionally
-call `item_to_item_similarity`, then merge the sources and call `rank_tracks`
+`retrieve_user_to_user_candidates` and `retrieve_user_to_item_candidates` when
+a listener ID is supplied, optionally call `item_to_item_similarity`, then merge
+the sources and call `rank_tracks`
 and a separate explanation step. The application injects listener identity
 into the user-to-user tool; the model cannot choose another user's history.
 `retrieval.py` owns source retrieval and track-ID fusion; `ranking.py` owns
@@ -148,10 +151,14 @@ eligible positive training pseudo-interactions. The API returns only a bounded
 neighbor summary; candidate support can use every eligible neighbor.
 Users with no usable CF-BPR vector receive text candidates.
 
+The user-to-item route compares a published 128-dimensional CF-BPR user factor
+against the separate track CF-BPR index using inner product. It excludes
+explicitly blocked tracks and any known prior positive training tracks. An
+unavailable user factor contributes no candidates; text retrieval still runs.
+
 When the request includes a verified `reference_track_id`, or a single prior
 recommendation resolves "more like that," the graph calls `item_to_item_similarity`.
-An unresolved "that track" receives a clarification question. A separate direct
-user-to-item tool is a later subtask. Without prepared CF data, recommendation
+An unresolved "that track" receives a clarification question. Without prepared CF data, recommendation
 retrieval uses text and any available item reference; the old profile/goal
 neighbor path has been removed.
 
@@ -160,7 +167,7 @@ neighbor path has been removed.
 The CF path keeps raw cosine and neighbor-support values as evidence but ranks
 the merged candidates by reciprocal source ranks: each available source adds
 `1 / (60 + rank)`. This avoids adding incomparable Qwen similarity and CF
-support scores. Explicit exclusions are applied before final ranking, and the
+support and user-to-item inner-product scores. Explicit exclusions are applied before final ranking, and the
 ranker enforces the requested limit and artist diversity. The constant and
 source contributions still require held-out validation.
 

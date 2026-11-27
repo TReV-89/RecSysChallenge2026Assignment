@@ -1,18 +1,16 @@
-"""Check tool contracts and the main agent without a catalog or provider request."""
+"""Check tool contracts in isolation, without a full ReAct loop."""
+
+import json
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ValidationError
 
-from music_recommender.agent import build_agent, default_query, tool_arguments
-from music_recommender.config import Settings
+from music_recommender.ranking import rank_candidates
 from music_recommender.schemas import (
     Candidate,
     RecommendationRequest,
     RetrievalResult,
-    SearchArguments,
     Track,
 )
 from music_recommender.tools import build_tools
@@ -20,7 +18,7 @@ from music_recommender.tools.calculate_user_similarity import find_cf_neighbors
 
 
 class StubRetriever:
-    def retrieve(self, request, query):
+    def retrieve_text(self, request, query):
         return RetrievalResult(
             query=query,
             neighbors=[],
@@ -30,9 +28,23 @@ class StubRetriever:
                     query_score=0.9,
                     neighbor_score=0,
                     supporting_users=[],
+                    source_ranks={"text": 1},
                 )
             ],
         )
+
+    def retrieve_cf(self, request):
+        return RetrievalResult(query="", neighbors=[], candidates=[])
+
+    def retrieve_user_to_item(self, request):
+        return RetrievalResult(query="", neighbors=[], candidates=[])
+
+    def merge_results(self, request, query, results):
+        merged = {}
+        for result in results:
+            for candidate in result.candidates:
+                merged.setdefault(candidate.track.track_id, candidate)
+        return RetrievalResult(query=query, neighbors=[], candidates=list(merged.values()))
 
 
 def test_cf_neighbors_scores_full_training_pool_before_optional_cutoff():
@@ -52,9 +64,11 @@ def test_cf_neighbors_scores_full_training_pool_before_optional_cutoff():
 
 
 def test_model_tool_schemas_hide_application_context_and_include_return_contracts():
+    request = RecommendationRequest(message="t1")
+    tools = build_tools(StubRetriever(), request, [], {})
     for tool, fields in zip(
-        build_tools(),
-        [{"query"}, set(), {"track_id", "vector_space", "top_k"}, {"exclude_track_ids"}],
+        tools,
+        [{"query"}, set(), set(), {"track_id", "vector_space", "top_k"}, {"exclude_track_ids"}],
         strict=True,
     ):
         function = convert_to_openai_tool(tool)["function"]
@@ -62,24 +76,35 @@ def test_model_tool_schemas_hide_application_context_and_include_return_contract
         assert "Returns:" in function["description"]
 
 
-def test_tools_return_typed_results_and_reject_unknown_ids():
-    search, user_search, _, rank = build_tools()
+def test_tools_return_catalog_grounded_summaries_and_collect_results():
     request = RecommendationRequest(message="t1")
-    result = search.invoke({"query": "calm", "request": request, "retriever": StubRetriever()})
-    assert isinstance(result, RetrievalResult)
-    class CFStub:
-        def retrieve_cf(self, supplied_request):
-            assert supplied_request is request
-            return RetrievalResult(query="", neighbors=[], candidates=[])
+    collected = []
+    result_box = {}
+    search, user_to_user, user_to_item, _, rank = build_tools(
+        StubRetriever(), request, collected, result_box
+    )
+    # Every tool returns a JSON string, never a raw (possibly empty) list: an empty
+    # Python list passes LangChain's "is this a content block list" check vacuously
+    # and gets sent to providers as invalid empty message content.
+    summary = json.loads(search.invoke({"query": "calm"}))
+    assert summary == [{"track_id": "t1", "title": "Quiet", "artists": ["A"], "tags": []}]
+    assert json.loads(user_to_user.invoke({})) == []
+    assert json.loads(user_to_item.invoke({})) == []
+    assert len(collected) == 3  # text + empty cf + empty user-to-item, each appended
 
-    assert user_search.invoke({"request": request, "retriever": CFStub()}).candidates == []
-    context = {"request": request, "retrieval": result}
-    assert rank.invoke({"exclude_track_ids": [], **context})[0].score == 0.9
-    assert rank.invoke({"exclude_track_ids": ["t1"], **context}) == []
+    ranked_summary = json.loads(rank.invoke({"exclude_track_ids": []}))
+    assert ranked_summary[0]["track_id"] == "t1"
+    assert result_box["ranked"][0].score == 0.9
+
     with pytest.raises(ValueError, match="outside the retrieved candidates"):
-        rank.invoke({"exclude_track_ids": ["invented"], **context})
+        rank_candidates(result_box["retrieval"], request, ["invented"])
+
+
+def test_search_tool_rejects_empty_query():
+    request = RecommendationRequest(message="calm")
+    search = build_tools(StubRetriever(), request, [], {})[0]
     with pytest.raises(ValidationError):
-        search.invoke({"query": "", "request": request, "retriever": StubRetriever()})
+        search.invoke({"query": ""})
 
 
 def test_item_to_item_searches_selected_space_and_excludes_example():
@@ -97,65 +122,31 @@ def test_item_to_item_searches_selected_space_and_excludes_example():
             assert (kind, vector, limit) == ("tracks", [1.0], 3)
             return ["example", "similar", "unknown"]
 
-    retriever = StubRetriever()
-    retriever.store = FakeStore()
-    item_tool = build_tools()[2]
-    assert item_tool.invoke(
-        {"track_id": "example", "vector_space": "metadata", "top_k": 2, "store": retriever.store}
-    ) == ["similar"]
-    assert item_tool.invoke(
-        {"track_id": "example", "vector_space": "cf", "top_k": 2, "store": retriever.store}
-    ) == []
+    class FakeRetriever(StubRetriever):
+        def __init__(self):
+            self.store = FakeStore()
+
+        def item_candidates(self, request, ids, vector_space):
+            return RetrievalResult(
+                query="",
+                neighbors=[],
+                candidates=[
+                    Candidate(
+                        track=Track(track_id=track_id, title=track_id, artists=[], tags=[]),
+                        query_score=0.0,
+                        neighbor_score=0.0,
+                        supporting_users=[],
+                        source_ranks={f"item_to_item_{vector_space}": rank},
+                    )
+                    for rank, track_id in enumerate(ids, 1)
+                ],
+            )
+
+    request = RecommendationRequest(message="calm")
+    item_tool = build_tools(FakeRetriever(), request, [], {})[3]
+    result = json.loads(
+        item_tool.invoke({"track_id": "example", "vector_space": "metadata", "top_k": 2})
+    )
+    assert result == [{"track_id": "similar", "title": "similar", "artists": [], "tags": []}]
     with pytest.raises(ValueError, match="not in the catalog"):
-        item_tool.invoke(
-            {"track_id": "invented", "vector_space": "metadata", "top_k": 2, "store": retriever.store}
-        )
-
-
-def test_main_agent_reuse_keeps_request_context_isolated():
-    agent = build_agent(Settings(), StubRetriever())
-    for track_id in ("first", "second"):
-        response = agent.invoke({"request": RecommendationRequest(message=track_id)})["response"]
-        assert response.mode == "local"
-        assert [item.track.track_id for item in response.recommendations] == [track_id]
-
-
-def test_long_local_query_fits_search_contract():
-    request = RecommendationRequest(message="x" * 6000, profile="p" * 6000, goal="g" * 3000)
-    query = default_query(request)
-    assert SearchArguments(query=query).query.endswith("x" * 2000)
-    response = build_agent(Settings(), StubRetriever()).invoke({"request": request})["response"]
-    assert response.mode == "local"
-
-
-@pytest.mark.parametrize(
-    "calls",
-    [
-        [],
-        [{"name": "rank_tracks", "args": {"exclude_track_ids": []}, "id": "wrong"}],
-        [{"name": "retrieve_candidates", "args": {"query": "calm", "request": {}}, "id": "injected"}],
-        [
-            {"name": "retrieve_candidates", "args": {"query": "calm"}, "id": "one"},
-            {"name": "retrieve_candidates", "args": {"query": "calm"}, "id": "two"},
-        ],
-    ],
-)
-def test_main_agent_rejects_unexpected_or_context_overriding_calls(calls):
-    class InvalidLLM:
-        def bind_tools(self, tools, tool_choice):
-            return RunnableLambda(lambda messages: AIMessage(content="", tool_calls=calls))
-
-    tools = build_tools()
-    with pytest.raises(ValueError):
-        tool_arguments(InvalidLLM(), tools, tools[0], SearchArguments, "prompt", "calm")
-
-
-def test_catalog_failures_are_not_hidden_as_provider_fallbacks():
-    class BrokenRetriever:
-        def retrieve(self, request, query):
-            raise RuntimeError("Catalog unavailable")
-
-    with pytest.raises(RuntimeError, match="Catalog unavailable"):
-        build_agent(Settings(), BrokenRetriever()).invoke(
-            {"request": RecommendationRequest(message="calm")}
-        )
+        item_tool.invoke({"track_id": "invented", "vector_space": "metadata", "top_k": 2})

@@ -1,6 +1,7 @@
 """Exercise the prepared-data boundary and a complete CF-backed retrieval turn."""
 
 import pandas as pd
+from conftest import ScriptedLLM
 
 from music_recommender.agent import build_agent
 from music_recommender.cf_data import load_history, load_test_query_vectors
@@ -23,11 +24,12 @@ class Embedder:
 
 def test_greeting_bypasses_retrieval():
     class NoSearch:
-        def retrieve(self, request, query):
+        def retrieve_text(self, request, query):
             raise AssertionError("A greeting must not search the catalog")
 
-    response = build_agent(Settings(), NoSearch()).invoke(
-        {"request": RecommendationRequest(message="Hello!")}
+    llm = ScriptedLLM(script=[{"text": "Hi! Tell me what music you're after."}])
+    response = build_agent(Settings(), NoSearch(), llm).invoke(
+        {"request": RecommendationRequest(message="Hello!"), "notices": []}
     )["response"]
     assert response.kind == "chat"
     assert response.message
@@ -35,30 +37,13 @@ def test_greeting_bypasses_retrieval():
 
 
 def test_conversational_question_bypasses_retrieval_with_provider():
-    from langchain_core.messages import AIMessage
-    from langchain_core.runnables import RunnableLambda
-
     class NoSearch:
-        def retrieve(self, request, query):
+        def retrieve_text(self, request, query):
             raise AssertionError("A discussion turn must not search the catalog")
 
-    class ChatModel:
-        def bind_tools(self, tools, tool_choice):
-            assert tool_choice == "RouteDecision"
-            return RunnableLambda(
-                lambda messages: AIMessage(
-                    content="",
-                    tool_calls=[
-                        {"name": "RouteDecision", "args": {"route": "chat"}, "id": "route-1"}
-                    ],
-                )
-            )
-
-        def invoke(self, messages):
-            return AIMessage(content="We can talk through your music preferences first.")
-
-    response = build_agent(Settings(), NoSearch(), ChatModel()).invoke(
-        {"request": RecommendationRequest(message="I am curious about your approach")}
+    llm = ScriptedLLM(script=[{"text": "We can talk through your music preferences first."}])
+    response = build_agent(Settings(), NoSearch(), llm).invoke(
+        {"request": RecommendationRequest(message="I am curious about your approach"), "notices": []}
     )["response"]
     assert response.kind == "chat"
     assert "preferences" in response.message
@@ -83,6 +68,13 @@ def test_official_history_and_test_vector_feed_cf_candidates(tmp_path, monkeypat
         "track_id",
     )
     store.upsert("users_cf", ["train-a"], [vector(128)], [{"user_id": "train-a"}])
+    store.upsert(
+        "tracks_cf",
+        ["text-track", "neighbor-track", "unindexed-track"],
+        [vector(128), [2.0] + [0.0] * 127, [3.0] + [0.0] * 127],
+        [{"track_id": "text-track"}, {"track_id": "neighbor-track"},
+         {"track_id": "unindexed-track"}],
+    )
     store.set_state("ready", True)
     pd.DataFrame(
         [
@@ -114,6 +106,8 @@ def test_official_history_and_test_vector_feed_cf_candidates(tmp_path, monkeypat
     by_id = {candidate.track.track_id: candidate for candidate in result.candidates}
     assert "neighbor-track" in by_id
     assert by_id["neighbor-track"].source_ranks["user_to_user"] == 1
+    assert by_id["neighbor-track"].source_ranks["user_to_item"] == 1
+    assert by_id["text-track"].source_ranks["user_to_item"] == 2
     assert by_id["neighbor-track"].supporting_users[0].evidence_type == "positive_conversation_feedback"
     assert result.neighbors[0].user_id == "train-a"
     assert result.neighbors[0].source == "cf_bpr"
@@ -121,9 +115,24 @@ def test_official_history_and_test_vector_feed_cf_candidates(tmp_path, monkeypat
     assert [candidate.track.track_id for candidate in limited.retrieve_cf(
         RecommendationRequest(message="calm music", user_id="test-q")
     ).candidates] == ["neighbor-track"]
+    assert [candidate.track.track_id for candidate in limited.retrieve_user_to_item(
+        RecommendationRequest(message="calm music", user_id="test-q")
+    ).candidates] == ["neighbor-track"]
+    assert [candidate.track.track_id for candidate in limited.retrieve_user_to_item(
+        RecommendationRequest(message="calm music", user_id="test-q",
+                              excluded_track_ids=["neighbor-track"])
+    ).candidates] == ["text-track"]
 
-    response = build_agent(settings, retriever).invoke(
-        {"request": RecommendationRequest(message="calm music", user_id="test-q")}
+    two_source_script = [
+        {"tool": "retrieve_candidates", "args": {"query": "calm music"}},
+        {"tool": "retrieve_user_to_user_candidates", "args": {}},
+        {"tool": "retrieve_user_to_item_candidates", "args": {}},
+        {"tool": "rank_tracks", "args": {"exclude_track_ids": []}},
+        {"text": "Here is a calm pick from similar listeners."},
+    ]
+
+    response = build_agent(settings, retriever, ScriptedLLM(script=two_source_script)).invoke(
+        {"request": RecommendationRequest(message="calm music", user_id="test-q"), "notices": []}
     )["response"]
     assert response.kind == "recommendations"
     assert any(item.track.track_id == "neighbor-track" for item in response.recommendations)
@@ -132,20 +141,37 @@ def test_official_history_and_test_vector_feed_cf_candidates(tmp_path, monkeypat
 
     from main import app
 
-    monkeypatch.setattr(app.state, "agent", build_agent(settings, retriever), raising=False)
+    monkeypatch.setattr(
+        app.state,
+        "agent",
+        build_agent(settings, retriever, ScriptedLLM(script=two_source_script)),
+        raising=False,
+    )
     http = TestClient(app).post(
         "/chat", json={"message": "calm music", "user_id": "test-q"}
     )
     assert http.status_code == 200
     assert any(row["track"]["track_id"] == "neighbor-track" for row in http.json()["recommendations"])
 
-    three_source = build_agent(settings, retriever).invoke(
+    four_source_script = [
+        {"tool": "retrieve_candidates", "args": {"query": "more like this track"}},
+        {"tool": "retrieve_user_to_user_candidates", "args": {}},
+        {"tool": "retrieve_user_to_item_candidates", "args": {}},
+        {
+            "tool": "item_to_item_similarity",
+            "args": {"track_id": "text-track", "vector_space": "metadata", "top_k": 20},
+        },
+        {"tool": "rank_tracks", "args": {"exclude_track_ids": []}},
+        {"text": "Here is something similar from every available source."},
+    ]
+    three_source = build_agent(settings, retriever, ScriptedLLM(script=four_source_script)).invoke(
         {
             "request": RecommendationRequest(
                 message="More like this track",
                 user_id="test-q",
                 reference_track_id="text-track",
-            )
+            ),
+            "notices": [],
         }
     )
     neighbor_candidate = next(
@@ -153,9 +179,11 @@ def test_official_history_and_test_vector_feed_cf_candidates(tmp_path, monkeypat
         if candidate.track.track_id == "neighbor-track"
     )
     assert "user_to_user" in neighbor_candidate.source_ranks
+    assert "user_to_item" in neighbor_candidate.source_ranks
     assert "item_to_item_metadata" in neighbor_candidate.source_ranks
     assert "text" in neighbor_candidate.source_ranks
 
     cold = retriever.retrieve(RecommendationRequest(message="calm music", user_id="no-vector"), "calm")
     assert cold.neighbors == []
     assert all("user_to_user" not in item.source_ranks for item in cold.candidates)
+    assert all("user_to_item" not in item.source_ranks for item in cold.candidates)

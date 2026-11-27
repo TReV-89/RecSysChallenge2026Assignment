@@ -115,8 +115,7 @@ def load_inputs(settings, output, count, seed):
 
 def run(args):
     settings = Settings.from_env()
-    if args.mode != "local":
-        settings.llm_provider = args.mode
+    settings.llm_provider = args.mode
     settings.data_dir = (args.data_dir or settings.data_dir / "catalog").resolve()
     # Twenty explanations need more space than the interactive five-track default.
     settings.max_output_tokens = 4096
@@ -166,11 +165,9 @@ def run(args):
         if predictions and existing_manifest is None:
             raise ValueError("Checkpoint has no manifest; cannot safely resume.")
         write_json(manifest_path, manifest)
-        if args.mode != "local" and not settings.api_key():
-            raise ValueError(
-                f"API key is required for --mode {args.mode}; use --mode local explicitly otherwise."
-            )
-        llm = create_llm(settings, settings.api_key()) if args.mode != "local" else None
+        if not settings.api_key():
+            raise ValueError(f"API key is required for --mode {args.mode}.")
+        llm = create_llm(settings, settings.api_key())
         agent = build_agent(settings, Retriever(settings, store, LocalEmbedder(settings)), llm)
         indexed = set(store.records("tracks"))
         write_json(
@@ -206,7 +203,7 @@ def run(args):
                 write_json(output / "allowance.json", allowance)
             started = time.monotonic()
             response = agent.invoke({"request": case.request, "notices": []})["response"]
-            if args.mode != "local" and response.mode == "fallback" and not args.allow_fallbacks:
+            if response.mode == "fallback" and not args.allow_fallbacks:
                 write_json(
                     output / "last_failure.json",
                     {
@@ -336,7 +333,7 @@ def main():
         "--sessions", type=int, default=100, help="Random complete sessions; 0 means all."
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--mode", choices=["groq", "openrouter", "local"], default="groq")
+    parser.add_argument("--mode", choices=["groq", "openrouter"], default="groq")
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(

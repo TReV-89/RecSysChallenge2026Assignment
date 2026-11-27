@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
+from conftest import FakeEmbedder, ScriptedLLM, vector
 
-from music_recommender.agent import build_agent, known_reference, validate_explanations
+from music_recommender.agent import build_agent, validate_explanations
 from music_recommender.config import Settings
 from music_recommender.embeddings import cosine01, validate_vector
 from music_recommender.ingest import ingest, session_record
@@ -9,7 +10,6 @@ from music_recommender.ranking import rank_candidates
 from music_recommender.retrieval import Retriever
 from music_recommender.schemas import (
     Candidate,
-    ChatTurn,
     ExplanationDraft,
     RecommendationRequest,
     RetrievalResult,
@@ -17,76 +17,6 @@ from music_recommender.schemas import (
     TrackExplanation,
 )
 from music_recommender.store import CatalogStore
-
-
-def vector(axis=0, size=1024):
-    result = np.zeros(size, dtype=np.float32)
-    result[axis] = 1
-    return result.tolist()
-
-
-class FakeEmbedder:
-    def documents(self, texts):
-        return [vector(1 if "rock" in text.lower() else 0) for text in texts]
-
-    def query(self, text, purpose="tracks"):
-        return vector(1 if "rock" in text.lower() else 0)
-
-
-@pytest.fixture
-def catalog(tmp_path):
-    settings = Settings(data_dir=tmp_path / "catalog", cache_dir=tmp_path / "cache")
-    rows = {
-        "sessions": [
-            {
-                "session_id": "s1",
-                "user_id": "u1",
-                "user_profile": {"preferred_musical_culture": "ambient"},
-                "conversation_goal": {"listener_goal": "relax", "specificity": "LL"},
-            },
-            {
-                "session_id": "s2",
-                "user_id": "u1",
-                "user_profile": {"preferred_musical_culture": "ambient"},
-                "conversation_goal": {"listener_goal": "rest", "specificity": "LL"},
-            },
-            {
-                "session_id": "s3",
-                "user_id": "u2",
-                "user_profile": {"preferred_musical_culture": "rock"},
-                "conversation_goal": {"listener_goal": "rock", "specificity": "HH"},
-            },
-        ],
-        "tracks": [
-            {
-                "track_id": "t1",
-                "track_name": ["Quiet"],
-                "artist_name": ["A"],
-                "tag_list": ["ambient"],
-            },
-            {"track_id": "t2", "track_name": ["Loud"], "artist_name": ["B"], "tag_list": ["rock"]},
-            {"track_id": "t3", "track_name": ["Still"], "artist_name": ["C"], "tag_list": ["calm"]},
-        ],
-        "users": [{"user_id": "u1"}, {"user_id": "u2"}],
-        "track_vectors": [
-            {
-                "track_id": "t1",
-                "metadata-qwen3_embedding_0.6b": vector(),
-                "cf-bpr": vector(size=128),
-            },
-            {"track_id": "t2", "metadata-qwen3_embedding_0.6b": vector(1), "cf-bpr": []},
-            {
-                "track_id": "t3",
-                "metadata-qwen3_embedding_0.6b": vector(),
-                "cf-bpr": vector(size=128),
-            },
-            {"track_id": "empty", "metadata-qwen3_embedding_0.6b": [], "cf-bpr": []},
-        ],
-        "user_vectors": [{"user_id": "u1", "cf-bpr": vector(size=128)}],
-    }
-    loader = lambda key, cache_dir: rows[key]
-    report = ingest(settings, loader=loader, embedder=FakeEmbedder())
-    return settings, CatalogStore(settings), report, loader
 
 
 def test_embedding_spaces_and_missing_values():
@@ -185,232 +115,212 @@ def test_ranker_and_explainer_reject_invented_ids_and_tags():
             )
 
 
-def test_local_graph_runs_end_to_end(catalog):
+def test_agent_requires_an_llm(catalog):
     settings, store, *_ = catalog
-    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()))
-    response = graph.invoke({"request": RecommendationRequest(message="ambient"), "notices": []})[
-        "response"
-    ]
-    assert response.mode == "local"
-    assert response.recommendations[0].track.track_id == "t1"
-    assert response.neighbors == []
+    agent = build_agent(settings, Retriever(settings, store, FakeEmbedder()))
+    with pytest.raises(RuntimeError, match="An LLM is required"):
+        agent.invoke({"request": RecommendationRequest(message="ambient"), "notices": []})
 
 
-def test_agent_uses_item_to_item_for_verified_reference(catalog):
-    settings, store, *_ = catalog
-    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()))
-    result = graph.invoke(
-        {
-            "request": RecommendationRequest(
-                message="More like this track, please",
-                reference_track_id="t1",
-            )
-        }
-    )
-    assert result["response"].kind == "recommendations"
-    by_id = {candidate.track.track_id: candidate for candidate in result["retrieval"].candidates}
-    assert "item_to_item_metadata" in by_id["t3"].source_ranks
-    assert "t1" not in {
-        candidate.track.track_id
-        for candidate in result["retrieval"].candidates
-        if "item_to_item_metadata" in candidate.source_ranks
-    }
+def test_agent_skips_tools_for_a_greeting(catalog):
+    settings, *_ = catalog
 
-
-def test_unresolved_anaphoric_reference_asks_for_track():
     class NoSearch:
-        def retrieve(self, request, query):
-            raise AssertionError("Ambiguous reference triggered retrieval")
+        def retrieve_text(self, request, query):
+            raise AssertionError("A greeting must not search the catalog")
 
-    response = build_agent(Settings(), NoSearch()).invoke(
-        {"request": RecommendationRequest(message="More like that one")}
+    llm = ScriptedLLM(script=[{"text": "Hi! Tell me what music you're after."}])
+    response = build_agent(settings, NoSearch(), llm).invoke(
+        {"request": RecommendationRequest(message="Hello!"), "notices": []}
     )["response"]
     assert response.kind == "chat"
-    assert "Which track" in response.message
+    assert response.message == "Hi! Tell me what music you're after."
+    assert response.recommendations == []
 
 
-def test_reference_resolves_from_validated_assistant_history():
-    track_id = "12345678-1234-1234-1234-123456789abc"
-
-    class Store:
-        def records(self, kind, ids):
-            return {track_id: {"track_id": track_id}} if track_id in ids else {}
-
-    state = {
-        "request": RecommendationRequest(
-            message="More like that one",
-            history=[ChatTurn(role="assistant", content=f"TrackID: {track_id}")],
-        )
-    }
-    assert known_reference(state, Store()) == track_id
-
-
-def test_single_prior_recommendation_can_be_item_reference(catalog):
-    from langgraph.checkpoint.memory import InMemorySaver
-
+def test_agent_runs_text_retrieval_then_ranks_and_explains(catalog):
     settings, store, *_ = catalog
-    graph = build_agent(
-        settings, Retriever(settings, store, FakeEmbedder()), checkpointer=InMemorySaver()
+    llm = ScriptedLLM(
+        script=[
+            {"tool": "retrieve_candidates", "args": {"query": "ambient"}},
+            {"tool": "rank_tracks", "args": {"exclude_track_ids": []}},
+            {"text": "Here is a calm pick."},
+        ],
+        explanation=ExplanationDraft(
+            tracks=[
+                TrackExplanation(track_id="t1", explanation="Its ambient tag fits.", cited_tags=["ambient"]),
+            ]
+        ),
     )
-    config = {"configurable": {"thread_id": "item-followup"}}
-    first = graph.invoke(
-        {"request": RecommendationRequest(message="ambient", limit=1)}, config=config
+    retriever = Retriever(settings, store, FakeEmbedder())
+    response = build_agent(settings, retriever, llm).invoke(
+        {"request": RecommendationRequest(message="ambient", limit=1), "notices": []}
+    )["response"]
+    assert llm.tool_calls_made == ["retrieve_candidates", "rank_tracks"]
+    assert response.mode == "groq"
+    assert response.notices == []
+    assert [r.track.track_id for r in response.recommendations] == ["t1"]
+    assert response.recommendations[0].explanation == "Its ambient tag fits."
+
+
+def test_agent_can_select_cf_item_space_for_a_track_seen_in_context(catalog):
+    settings, store, *_ = catalog
+    llm = ScriptedLLM(
+        script=[
+            {
+                "tool": "item_to_item_similarity",
+                "args": {"track_id": "t1", "vector_space": "cf", "top_k": 5},
+            },
+            {"tool": "rank_tracks", "args": {"exclude_track_ids": []}},
+            {"text": "Here is something with a similar collaborative profile."},
+        ],
     )
-    reference = first["response"].recommendations[0].track.track_id
-    second = graph.invoke(
-        {"request": RecommendationRequest(message="More like that one")}, config=config
+    retriever = Retriever(settings, store, FakeEmbedder())
+    result = build_agent(settings, retriever, llm).invoke(
+        {
+            "request": RecommendationRequest(
+                message="Find tracks with the same vibe", reference_track_id="t1"
+            ),
+            "notices": [],
+        }
     )
-    assert second["reference_track_id"] == reference
+    assert "item_to_item_similarity" in llm.tool_calls_made
+    assert any(
+        "item_to_item_cf" in candidate.source_ranks for candidate in result["retrieval"].candidates
+    )
+
+
+def test_item_to_item_rejects_an_id_not_seen_in_this_conversation(catalog):
+    settings, store, *_ = catalog
+    llm = ScriptedLLM(
+        script=[
+            {
+                "tool": "item_to_item_similarity",
+                "args": {"track_id": "invented-id", "vector_space": "metadata", "top_k": 5},
+            },
+            {"text": "I could not find that track; could you name it again?"},
+        ],
+    )
+    retriever = Retriever(settings, store, FakeEmbedder())
+    response = build_agent(settings, retriever, llm).invoke(
+        {"request": RecommendationRequest(message="more like that one"), "notices": []}
+    )["response"]
+    # The tool call raises ValueError inside the loop; the ReAct harness recovers by turning
+    # it into a ToolMessage the model sees (no top-level failure), and no candidates were ranked.
+    assert response.recommendations == []
+    assert not any("Agent tool loop unavailable" in notice for notice in response.notices)
+    assert response.message == "I could not find that track; could you name it again?"
+
+
+def test_agent_resolves_a_reference_from_resent_client_history(catalog):
+    settings, store, *_ = catalog
+    from music_recommender.schemas import ChatTurn
+
+    llm = ScriptedLLM(
+        script=[
+            {
+                "tool": "item_to_item_similarity",
+                "args": {"track_id": "t1", "vector_space": "metadata", "top_k": 5},
+            },
+            {"tool": "rank_tracks", "args": {"exclude_track_ids": []}},
+            {"text": "Here is another ambient pick."},
+        ],
+    )
+    retriever = Retriever(settings, store, FakeEmbedder())
+    request = RecommendationRequest(
+        message="More like that one",
+        history=[
+            ChatTurn(role="user", content="Recommend something ambient"),
+            ChatTurn(role="assistant", content="TrackID: t1 - Quiet by A"),
+        ],
+    )
+    result = build_agent(settings, retriever, llm).invoke({"request": request, "notices": []})
+    assert "item_to_item_similarity" in llm.tool_calls_made
     assert any(
         "item_to_item_metadata" in candidate.source_ranks
-        for candidate in second["retrieval"].candidates
-    )
-
-
-def test_agent_can_select_cf_item_space_for_known_track(catalog):
-    from langchain_core.messages import AIMessage
-    from langchain_core.runnables import RunnableLambda
-
-    class ToolModel:
-        def __init__(self):
-            self.calls = []
-
-        def bind_tools(self, tools, tool_choice):
-            self.calls.append(tool_choice)
-            choices = {
-                "RouteDecision": {"route": "recommendations", "use_item_to_item": True},
-                "retrieve_candidates": {"query": "calm"},
-                "item_to_item_similarity": {
-                    "track_id": "t1", "vector_space": "cf", "top_k": 5
-                },
-                "rank_tracks": {"exclude_track_ids": []},
-            }
-            return RunnableLambda(
-                lambda messages: AIMessage(
-                    content="",
-                    tool_calls=[{"name": tool_choice, "args": choices[tool_choice], "id": "call"}],
-                )
-            )
-
-        def with_structured_output(self, *args, **kwargs):
-            raise RuntimeError("Use local explanations in this test")
-
-    settings, store, *_ = catalog
-    model = ToolModel()
-    result = build_agent(settings, Retriever(settings, store, FakeEmbedder()), model).invoke(
-        {"request": RecommendationRequest(message="Find tracks with the same vibe", reference_track_id="t1")}
-    )
-    assert "item_to_item_similarity" in model.calls
-    assert any(
-        "item_to_item_cf" in candidate.source_ranks
         for candidate in result["retrieval"].candidates
     )
 
 
-def test_graph_saves_state_to_configured_checkpoint(catalog):
+def test_provider_failure_yields_empty_recommendations_with_a_notice(catalog):
+    settings, store, *_ = catalog
+
+    class UnavailableLLM:
+        def bind_tools(self, *args, **kwargs):
+            raise RuntimeError("Simulated rate limit")
+
+        def with_structured_output(self, *args, **kwargs):
+            raise RuntimeError("Simulated rate limit")
+
+    retriever = Retriever(settings, store, FakeEmbedder())
+    response = build_agent(settings, retriever, UnavailableLLM()).invoke(
+        {"request": RecommendationRequest(message="ambient"), "notices": []}
+    )["response"]
+    assert response.recommendations == []
+    assert any("Agent tool loop unavailable" in notice for notice in response.notices)
+
+
+def test_explanation_failure_falls_back_to_templates_but_keeps_recommendations(catalog):
+    settings, store, *_ = catalog
+
+    class NoExplanationLLM(ScriptedLLM):
+        def with_structured_output(self, schema, **kwargs):
+            raise RuntimeError("Simulated judge outage")
+
+    llm = NoExplanationLLM(
+        script=[
+            {"tool": "retrieve_candidates", "args": {"query": "ambient"}},
+            {"tool": "rank_tracks", "args": {"exclude_track_ids": []}},
+            {"text": "Here is a calm pick."},
+        ]
+    )
+    retriever = Retriever(settings, store, FakeEmbedder())
+    response = build_agent(settings, retriever, llm).invoke(
+        {"request": RecommendationRequest(message="ambient", limit=1), "notices": []}
+    )["response"]
+    assert response.mode == "fallback"
+    assert response.recommendations
+    assert any("Agent explanation unavailable" in notice for notice in response.notices)
+
+
+def test_checkpointed_thread_does_not_resend_history(catalog):
+    from langchain.agents import create_agent
     from langgraph.checkpoint.memory import InMemorySaver
 
     settings, store, *_ = catalog
-    graph = build_agent(
-        settings,
-        Retriever(settings, store, FakeEmbedder()),
-        checkpointer=InMemorySaver(),
-    )
+    retriever = Retriever(settings, store, FakeEmbedder())
+    checkpointer = InMemorySaver()
     config = {"configurable": {"thread_id": "conversation-123"}}
-    request = RecommendationRequest(message="ambient")
 
-    graph.invoke({"request": request, "notices": []}, config=config)
+    first_llm = ScriptedLLM(script=[{"text": "ok"}])
+    build_agent(settings, retriever, first_llm, checkpointer=checkpointer).invoke(
+        {"request": RecommendationRequest(message="ambient"), "notices": []}, config=config
+    )
+    second_llm = ScriptedLLM(script=[{"text": "ok again"}])
+    build_agent(settings, retriever, second_llm, checkpointer=checkpointer).invoke(
+        {"request": RecommendationRequest(message="anything else?"), "notices": []}, config=config
+    )
 
-    snapshot = graph.get_state(config)
-    assert snapshot.values["request"] == request
-    assert snapshot.values["response"]
+    probe = create_agent(second_llm, tools=[], checkpointer=checkpointer)
+    snapshot = probe.get_state(config)
+    # Each turn adds exactly one HumanMessage and one final AIMessage; two turns means four
+    # persisted messages, never the client's full history re-added on top of the checkpoint.
+    assert len(snapshot.values["messages"]) == 4
 
 
-class UnavailableLLM:
-    def bind_tools(self, *args, **kwargs):
-        raise RuntimeError("Simulated rate limit")
-
-    def with_structured_output(self, *args, **kwargs):
-        raise RuntimeError("Simulated rate limit")
-
-
-def test_provider_failure_returns_labeled_local_fallback(catalog):
+def test_long_local_query_fits_search_contract(catalog):
     settings, store, *_ = catalog
-    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()), UnavailableLLM())
-    response = graph.invoke({"request": RecommendationRequest(message="ambient"), "notices": []})[
-        "response"
-    ]
-    assert response.mode == "fallback"
-    assert len(response.notices) == 3
-    assert response.recommendations
-
-
-class ScriptedLLM:
-    def __init__(self):
-        self.calls = []
-
-    def bind_tools(self, tools, tool_choice):
-        from langchain_core.messages import AIMessage
-        from langchain_core.runnables import RunnableLambda
-
-        assert {tool.name for tool in tools} == {
-            "retrieve_candidates", "retrieve_user_to_user_candidates",
-            "item_to_item_similarity", "rank_tracks"
-        }
-        self.calls.append(tool_choice)
-        args = (
-            {"query": "ambient"}
-            if tool_choice == "retrieve_candidates"
-            else {"exclude_track_ids": ["t2"]}
-        )
-        return RunnableLambda(
-            lambda messages: AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": tool_choice,
-                        "args": args,
-                        "id": "call1",
-                        "type": "tool_call",
-                    }
-                ],
-            )
-        )
-
-    def with_structured_output(self, schema, **kwargs):
-        from langchain_core.runnables import RunnableLambda
-
-        self.calls.append("explain")
-        assert kwargs == {"method": "json_schema", "strict": True}
-        return RunnableLambda(
-            lambda messages: ExplanationDraft(
-                tracks=[
-                    TrackExplanation(
-                        track_id="t1",
-                        explanation="Its ambient tag suits this request.",
-                        cited_tags=["ambient"],
-                    ),
-                    TrackExplanation(
-                        track_id="t3",
-                        explanation="Its calm tag suits this request.",
-                        cited_tags=["calm"],
-                    ),
-                ]
-            )
-        )
-
-
-def test_main_agent_tool_and_structured_output_path(catalog):
-    settings, store, *_ = catalog
-    llm = ScriptedLLM()
-    graph = build_agent(settings, Retriever(settings, store, FakeEmbedder()), llm)
-    response = graph.invoke({"request": RecommendationRequest(message="ambient"), "notices": []})[
-        "response"
-    ]
-    assert llm.calls == ["retrieve_candidates", "rank_tracks", "explain"]
-    assert response.mode == "groq"
-    assert [r.track.track_id for r in response.recommendations] == ["t1", "t3"]
-    assert response.notices == []
+    request = RecommendationRequest(message="x" * 6000, profile="p" * 6000, goal="g" * 3000)
+    llm = ScriptedLLM(
+        script=[
+            {"tool": "retrieve_candidates", "args": {"query": "x" * 2000}},
+            {"tool": "rank_tracks", "args": {"exclude_track_ids": []}},
+            {"text": "ok"},
+        ]
+    )
+    retriever = Retriever(settings, store, FakeEmbedder())
+    response = build_agent(settings, retriever, llm).invoke({"request": request, "notices": []})["response"]
+    assert response.kind in {"chat", "recommendations"}
 
 
 def test_ingestion_rejects_missing_metadata(tmp_path):

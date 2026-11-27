@@ -285,18 +285,19 @@ def test_runner_saves_resumes_and_scores_without_regenerating(monkeypatch, tmp_p
                     ],
                     neighbors=[],
                     notices=[],
-                    mode="local",
+                    mode="groq",
                 )
             }
 
     monkeypatch.setattr("music_recommender.store.CatalogStore", Store)
     monkeypatch.setattr("music_recommender.agent.build_agent", lambda *args: Agent())
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
     args = SimpleNamespace(
         data_dir=data_dir,
         output=tmp_path / "run",
         sessions=1,
         seed=42,
-        mode="local",
+        mode="groq",
         delay=0,
         score_only=False,
         allow_fallbacks=False,
