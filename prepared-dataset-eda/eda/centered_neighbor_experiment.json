@@ -1,0 +1,64 @@
+{
+  "protocol": "enhanced-cf-users-population-centered-cosine-v1",
+  "seed": 42,
+  "adapter": "C:\\Users\\hp\\Documents\\Recommender system\\RecSysChallenge2026Assignment\\prepared-dataset-eda\\eda\\culture_adapter_weights.npz",
+  "center_source": "mean of enhanced training-user factors only",
+  "formula": "cos(query-enhanced minus center, neighbor-enhanced minus center)",
+  "users": {
+    "tuning": 1137,
+    "evaluation": 1138
+  },
+  "training_pool": 8591,
+  "alpha": 1.0,
+  "tuning": {
+    "cosine": {
+      "recall@20": 0.0469845457972107,
+      "ndcg@20": 0.032591344084207274,
+      "hit_rate@20": 0.1284080914687775
+    },
+    "centered_cosine": {
+      "recall@20": 0.047219081124094314,
+      "ndcg@20": 0.03146502135902171,
+      "hit_rate@20": 0.1345646437994723
+    }
+  },
+  "evaluation": {
+    "cosine": {
+      "recall@20": 0.053075571177504395,
+      "ndcg@20": 0.03751080584031676,
+      "hit_rate@20": 0.14323374340949033
+    },
+    "centered_cosine": {
+      "recall@20": 0.05610302117331994,
+      "ndcg@20": 0.038044951625083576,
+      "hit_rate@20": 0.14499121265377857
+    }
+  },
+  "centered_vs_cosine_evaluation": {
+    "recall@20": {
+      "delta": 0.0030274499958155496,
+      "bootstrap_95ci": [
+        -0.002182295589589086,
+        0.008282387647501875
+      ]
+    },
+    "ndcg@20": {
+      "delta": 0.0005341457847668204,
+      "bootstrap_95ci": [
+        -0.0022080886420003045,
+        0.003168535176957839
+      ]
+    },
+    "hit_rate@20": {
+      "delta": 0.0017574692442882249,
+      "bootstrap_95ci": [
+        -0.01054481546572935,
+        0.01320298769771517
+      ]
+    }
+  },
+  "limitations": [
+    "This is population-centered cosine on latent factors, not classical rating-adjusted cosine.",
+    "The result covers the user-to-user candidate route, not the full agent."
+  ]
+}

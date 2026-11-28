@@ -1,0 +1,213 @@
+{
+  "protocol": "frozen-track-factor-culture-adapter-v1",
+  "seed": 42,
+  "fit": {
+    "fit_users": 5261,
+    "fit_interactions": 23443,
+    "vocabulary_size": 83,
+    "training_loss_by_epoch": [
+      0.5971427671902112,
+      0.5791309151039064,
+      0.5625099350083674,
+      0.5475911983566795,
+      0.5338068880003802,
+      0.5218851903912476,
+      0.5113634474676267,
+      0.5017073606054505
+    ],
+    "user_factor_median_norm": 0.03750785440206528,
+    "track_factor_median_norm": 0.027638189494609833
+  },
+  "split": {
+    "tuning_users": 1137,
+    "evaluation_users": 1138
+  },
+  "feature_coverage": {
+    "fit_users_with_vocabulary_tokens": 5171,
+    "validation_queries_with_vocabulary_tokens": 2235
+  },
+  "tuning": {
+    "user_to_user": {
+      "0.0": {
+        "recall@20": 0.04046781421451606,
+        "ndcg@20": 0.025760939247230212,
+        "hit_rate@20": 0.10993843447669305
+      },
+      "0.25": {
+        "recall@20": 0.046798173974954976,
+        "ndcg@20": 0.030614694495544964,
+        "hit_rate@20": 0.12401055408970976
+      },
+      "0.5": {
+        "recall@20": 0.049468107383674666,
+        "ndcg@20": 0.03225742750262605,
+        "hit_rate@20": 0.13280562884784522
+      },
+      "1.0": {
+        "recall@20": 0.0469845457972107,
+        "ndcg@20": 0.032591344084207274,
+        "hit_rate@20": 0.1284080914687775
+      }
+    },
+    "user_to_item": {
+      "0.0": {
+        "recall@20": 0.06733467353520123,
+        "ndcg@20": 0.04004555120219226,
+        "hit_rate@20": 0.1961301671064204
+      },
+      "0.25": {
+        "recall@20": 0.0690769359634795,
+        "ndcg@20": 0.04194793281502231,
+        "hit_rate@20": 0.20052770448548812
+      },
+      "0.5": {
+        "recall@20": 0.0727206097918499,
+        "ndcg@20": 0.04266728849385004,
+        "hit_rate@20": 0.20140721196130168
+      },
+      "1.0": {
+        "recall@20": 0.0683356368052938,
+        "ndcg@20": 0.03870822663951457,
+        "hit_rate@20": 0.18733509234828497
+      }
+    }
+  },
+  "baseline_evaluation": {
+    "user_to_user": {
+      "recall@20": 0.03660557368817474,
+      "ndcg@20": 0.028834785355787085,
+      "hit_rate@20": 0.10369068541300527
+    },
+    "user_to_item": {
+      "recall@20": 0.06596577119424218,
+      "ndcg@20": 0.04053695102921081,
+      "hit_rate@20": 0.1968365553602812
+    }
+  },
+  "selected": {
+    "user_to_user": {
+      "alpha": 1.0,
+      "evaluation": {
+        "recall@20": 0.053075571177504395,
+        "ndcg@20": 0.03751080584031676,
+        "hit_rate@20": 0.14323374340949033
+      },
+      "evaluation_vs_baseline": {
+        "recall@20": {
+          "delta": 0.01646999748932965,
+          "bootstrap_95ci": [
+            0.009933101096326051,
+            0.023774635952799394
+          ]
+        },
+        "ndcg@20": {
+          "delta": 0.008676020484529675,
+          "bootstrap_95ci": [
+            0.003981075923053525,
+            0.013668333197009283
+          ]
+        },
+        "hit_rate@20": {
+          "delta": 0.03954305799648506,
+          "bootstrap_95ci": [
+            0.022825131810193324,
+            0.05711775043936731
+          ]
+        }
+      },
+      "shuffled_culture_control_evaluation": {
+        "recall@20": 0.024468574776131895,
+        "ndcg@20": 0.016633155077616917,
+        "hit_rate@20": 0.07557117750439367
+      },
+      "selected_vs_shuffled_control": {
+        "recall@20": {
+          "delta": 0.0286069964013725,
+          "bootstrap_95ci": [
+            0.02104067285965353,
+            0.03574232153318269
+          ]
+        },
+        "ndcg@20": {
+          "delta": 0.020877650762699842,
+          "bootstrap_95ci": [
+            0.015672862770695115,
+            0.026002980755387116
+          ]
+        },
+        "hit_rate@20": {
+          "delta": 0.06766256590509666,
+          "bootstrap_95ci": [
+            0.0492091388400703,
+            0.0852372583479789
+          ]
+        }
+      }
+    },
+    "user_to_item": {
+      "alpha": 0.5,
+      "evaluation": {
+        "recall@20": 0.0705602979328814,
+        "ndcg@20": 0.04365522833255906,
+        "hit_rate@20": 0.20298769771529
+      },
+      "evaluation_vs_baseline": {
+        "recall@20": {
+          "delta": 0.004594526738639217,
+          "bootstrap_95ci": [
+            -0.0008191585069880321,
+            0.010321261193405304
+          ]
+        },
+        "ndcg@20": {
+          "delta": 0.0031182773033482515,
+          "bootstrap_95ci": [
+            0.00047076590521826525,
+            0.0057602641445056914
+          ]
+        },
+        "hit_rate@20": {
+          "delta": 0.006151142355008787,
+          "bootstrap_95ci": [
+            -0.007908611599297012,
+            0.0210896309314587
+          ]
+        }
+      },
+      "shuffled_culture_control_evaluation": {
+        "recall@20": 0.06405766172901496,
+        "ndcg@20": 0.03819994301019782,
+        "hit_rate@20": 0.19068541300527242
+      },
+      "selected_vs_shuffled_control": {
+        "recall@20": {
+          "delta": 0.0065026362038664316,
+          "bootstrap_95ci": [
+            0.000334232990208386,
+            0.01303608042514017
+          ]
+        },
+        "ndcg@20": {
+          "delta": 0.005455285322361238,
+          "bootstrap_95ci": [
+            0.0024233780284515756,
+            0.008503728808502264
+          ]
+        },
+        "hit_rate@20": {
+          "delta": 0.012302284710017574,
+          "bootstrap_95ci": [
+            -0.0035149384885764497,
+            0.028119507908611598
+          ]
+        }
+      }
+    }
+  },
+  "adapter_artifact": "C:\\Users\\hp\\Documents\\Recommender system\\RecSysChallenge2026Assignment\\prepared-dataset-eda\\eda\\culture_adapter_weights.npz",
+  "limitations": [
+    "Feedback is synthetic next-turn goal progress, not confirmed listening or liking.",
+    "Only preferred_musical_culture is adapted; published BPR track factors are frozen.",
+    "Official test targets and production catalog vectors are not changed."
+  ]
+}

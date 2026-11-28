@@ -8,11 +8,12 @@ from ._common import as_tool_content, summarize_candidates
 def make_retrieve_user_to_item_tool(retriever, request, collected: list):
     @tool
     def retrieve_user_to_item_candidates() -> str:
-        """Find catalog tracks matching a listener's published CF-BPR factor directly.
+        """Find catalog tracks matching a listener's CF-BPR user factor directly.
 
         Only use when the listener context below gives a listener ID with a
         CF-BPR vector. Takes no arguments. Compares the listener's own factor
-        directly against track factors, independent of other listeners.
+        directly against track factors, independent of other listeners. When a
+        musical-culture adapter is enabled, the user factor includes it.
 
         Returns:
             Catalog tracks by descending factor similarity, each with

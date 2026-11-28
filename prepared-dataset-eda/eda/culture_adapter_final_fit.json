@@ -1,0 +1,35 @@
+{
+  "protocol": "frozen-track-factor-culture-adapter-final-fit-v1",
+  "seed": 42,
+  "fit": {
+    "fit_users": 7536,
+    "fit_interactions": 41845,
+    "vocabulary_size": 106,
+    "training_loss_by_epoch": [
+      0.5737961858315114,
+      0.5451628826684116,
+      0.5227888099878603,
+      0.503528959591025,
+      0.48815413579132866,
+      0.47641109779738855,
+      0.4637695516027534,
+      0.45555949349787406
+    ],
+    "user_factor_median_norm": 0.03750785440206528,
+    "track_factor_median_norm": 0.027638189494609833
+  },
+  "eligible_history_users": 7536,
+  "heldout_sessions_excluded": 2275,
+  "published_training_user_factors": 8591,
+  "published_track_factors": 46455,
+  "base_training_user_factors_sha256": "d58be52df28ad36b720f878d1cf20b19886968c440b411d1d01a0da85af3d2f9",
+  "indexed_users_with_culture_tokens": 8475,
+  "selected_alphas_from_experiment": {
+    "user_to_user": 1.0,
+    "user_to_item": 0.5
+  },
+  "tuning_experiment": "C:\\Users\\hp\\Documents\\Recommender system\\RecSysChallenge2026Assignment\\prepared-dataset-eda\\eda\\culture_adapter_experiment.json",
+  "weights_artifact": "C:\\Users\\hp\\Documents\\Recommender system\\RecSysChallenge2026Assignment\\prepared-dataset-eda\\eda\\culture_adapter_final_weights.npz",
+  "adapted_training_users_artifact": "C:\\Users\\hp\\Documents\\Recommender system\\RecSysChallenge2026Assignment\\prepared-dataset-eda\\eda\\culture_adapter_final_users.npz",
+  "note": "The evaluation scores belong to the earlier nonvalidation-user fit; this final refit must be checked in the end-to-end pipeline before use."
+}

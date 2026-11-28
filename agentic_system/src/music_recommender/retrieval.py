@@ -1,5 +1,8 @@
 """Candidate retrieval by source, followed by track-ID fusion and ranking."""
 
+import numpy as np
+
+from .cf_profile_adapter import CultureAdapter
 from .embeddings import cosine01
 from .schemas import (
     Candidate,
@@ -35,6 +38,15 @@ class Retriever:
     def __init__(self, settings, store, embedder):
         self.settings, self.store, self.embedder = settings, store, embedder
         self._training_cf_vectors = None
+        self._training_cf_original = None
+        self._training_cf_center = None
+        self._cf_support_key = None
+        self._cf_support_value = None
+        weights = settings.cf_adapter_weights_path
+        users = settings.cf_adapter_users_path
+        if bool(weights) != bool(users):
+            raise ValueError("Set both CF adapter artifact paths, or neither")
+        self._culture_adapter = CultureAdapter(weights, users) if weights else None
 
     def _require_catalog(self) -> None:
         if not self.store.state("ready"):
@@ -44,7 +56,7 @@ class Retriever:
     def _empty(query: str = "") -> RetrievalResult:
         return RetrievalResult(query=query, neighbors=[], candidates=[])
 
-    def _query_cf_vector(self, request: RecommendationRequest):
+    def _query_cf_vector(self, request: RecommendationRequest, route: str):
         """Use a published test factor when present, otherwise a training factor."""
         if not request.user_id:
             return None
@@ -53,9 +65,13 @@ class Retriever:
             if self.store.state("cf_query_vectors_ready")
             else None
         )
-        if query_record is not None:
-            return query_record["vector"]
-        return self.store.vectors("users_cf", [request.user_id]).get(request.user_id)
+        vector = (
+            query_record["vector"] if query_record is not None
+            else self.store.vectors("users_cf", [request.user_id]).get(request.user_id)
+        )
+        if vector is not None and self._culture_adapter is not None:
+            return self._culture_adapter.enhance(vector, request.profile, route)
+        return vector
 
     def _excluded_cf_tracks(self, request: RecommendationRequest) -> set[str]:
         excluded = set(request.excluded_track_ids)
@@ -100,39 +116,73 @@ class Retriever:
         history_kind = "cf_history_" + self.settings.cf_history_mode
         if not request.user_id or not self.store.state(f"{history_kind}_ready"):
             return self._empty()
-        user_vector = self._query_cf_vector(request)
-        if user_vector is None:
-            return self._empty()
-        if self._training_cf_vectors is None:
-            self._training_cf_vectors = self.store.all_vectors("users_cf")
-        matches = find_cf_neighbors(request.user_id, user_vector, self._training_cf_vectors)
-        histories = self.store.records(history_kind, [user_id for user_id, _ in matches])
-        excluded = self._excluded_cf_tracks(request)
-        support_scores: dict[str, float] = {}
-        supporters: dict[str, list[SupportingUser]] = {}
-        neighbors = []
-        for user_id, score in matches:
-            history = histories.get(user_id)
-            if history is None:
-                continue
-            if len(neighbors) < self.settings.neighbor_count:
-                neighbors.append(Neighbor(user_id=user_id, score=score, source="cf_bpr"))
-            for track_id in history["track_ids"]:
-                if track_id in excluded:
+        cache_key = (
+            request.user_id, request.profile, history_kind,
+            self.settings.cf_neighbor_similarity, self.settings.neighbor_count,
+        )
+        if cache_key != self._cf_support_key:
+            user_vector = self._query_cf_vector(request, "user_to_user")
+            if user_vector is None:
+                return self._empty()
+            if self._training_cf_vectors is None:
+                original = self.store.all_vectors("users_cf")
+                self._training_cf_original = original
+                if self._culture_adapter is None:
+                    self._training_cf_vectors = original
+                else:
+                    self._training_cf_vectors = self._culture_adapter.training_pool(original)
+                    self._training_cf_center = self._culture_adapter.training_center
+                if (
+                    self.settings.cf_neighbor_similarity == "population_centered"
+                    and self._training_cf_center is None
+                ):
+                    self._training_cf_center = np.asarray(
+                        list(self._training_cf_vectors.values()), dtype=np.float32
+                    ).mean(axis=0)
+            has_profile_correction = (
+                self._culture_adapter is not None
+                and self._culture_adapter.has_known_culture(request.profile)
+            )
+            use_original = self._culture_adapter is not None and not has_profile_correction
+            training_vectors = (
+                self._training_cf_original if use_original else self._training_cf_vectors
+            )
+            center = (
+                self._training_cf_center
+                if not use_original and self.settings.cf_neighbor_similarity == "population_centered"
+                else None
+            )
+            matches = find_cf_neighbors(
+                request.user_id, user_vector, training_vectors, center_vector=center
+            )
+            histories = self.store.records(history_kind, [user_id for user_id, _ in matches])
+            support_scores: dict[str, float] = {}
+            supporters: dict[str, list[SupportingUser]] = {}
+            neighbors = []
+            for user_id, score in matches:
+                history = histories.get(user_id)
+                if history is None:
                     continue
-                support_scores[track_id] = support_scores.get(track_id, 0.0) + score
-                supporters.setdefault(track_id, []).append(
-                    SupportingUser(
-                        user_id=user_id,
-                        similarity=score,
-                        evidence_type="positive_conversation_feedback",
+                if len(neighbors) < self.settings.neighbor_count:
+                    neighbors.append(Neighbor(user_id=user_id, score=score, source="cf_bpr"))
+                for track_id in history["track_ids"]:
+                    support_scores[track_id] = support_scores.get(track_id, 0.0) + score
+                    supporters.setdefault(track_id, []).append(
+                        SupportingUser(
+                            user_id=user_id,
+                            similarity=score,
+                            evidence_type="positive_conversation_feedback",
+                        )
                     )
-                )
-        ordered = sorted(support_scores, key=lambda key: (-support_scores[key], key))
-        available = self.store.existing_record_ids("tracks", ordered)
-        ids = [track_id for track_id in ordered if track_id in available][
-            : self.settings.candidate_count
-        ]
+            ordered = sorted(support_scores, key=lambda key: (-support_scores[key], key))
+            available = self.store.existing_record_ids("tracks", ordered)
+            catalog_ids = [track_id for track_id in ordered if track_id in available]
+            self._cf_support_key = cache_key
+            self._cf_support_value = (neighbors, support_scores, supporters, catalog_ids)
+        neighbors, support_scores, supporters, catalog_ids = self._cf_support_value
+        excluded = self._excluded_cf_tracks(request)
+        ids = [track_id for track_id in catalog_ids if track_id not in excluded][
+            : self.settings.candidate_count]
         rows = self.store.records("tracks", ids)
         candidates = []
         for rank, track_id in enumerate(ids, 1):
@@ -153,9 +203,9 @@ class Retriever:
         return RetrievalResult(query="", neighbors=neighbors, candidates=candidates)
 
     def retrieve_user_to_item(self, request: RecommendationRequest) -> RetrievalResult:
-        """Rank catalog tracks by inner product with the user's CF-BPR factor."""
+        """Rank catalog tracks by inner product with the user's current CF factor."""
         self._require_catalog()
-        user_vector = self._query_cf_vector(request)
+        user_vector = self._query_cf_vector(request, "user_to_item")
         if user_vector is None:
             return self._empty()
         collection = self.store.collections["tracks_cf"]

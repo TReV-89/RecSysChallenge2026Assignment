@@ -19,9 +19,22 @@ def digest(value) -> str:
 
 
 def write_json(path: Path, value):
+    """Atomic write with retries: on Windows, a brief external lock (antivirus,
+    OneDrive, an IDE file watcher) on a just-replaced small JSON file can make
+    os.replace raise PermissionError even though nothing is wrong with the data.
+    This file is rewritten on every single turn, so that window gets hit often
+    enough in practice to abort an otherwise-healthy multi-hour run.
+    """
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    for attempt in range(5):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2 * (attempt + 1))
 
 
 def check_openrouter_allowance(settings, output, completed_turns, total_turns):
@@ -190,8 +203,9 @@ def run(args):
     settings.cf_history_mode = "official_test"
     settings.data_dir = (args.data_dir or settings.data_dir / "catalog").resolve()
     # Twenty explanations need more space than the interactive five-track default.
-    settings.max_output_tokens = 4096
+    settings.max_output_tokens = getattr(args, "max_output_tokens", 4096)
     settings.react_max_output_tokens = getattr(args, "react_max_output_tokens", 512)
+    settings.candidate_count = getattr(args, "candidate_count", 12)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     bundle = load_inputs(settings, output, args.sessions, args.seed)
@@ -586,7 +600,17 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--react-max-output-tokens", type=int, default=512,
-        help="Output-token allowance per ReAct call; explanations retain 4096 tokens.",
+        help="Output-token allowance per ReAct call; explanations retain --max-output-tokens.",
+    )
+    parser.add_argument(
+        "--max-output-tokens", type=int, default=4096,
+        help="Output-token allowance for explanation generation (twenty tracks need more "
+        "space than the interactive five-track default).",
+    )
+    parser.add_argument(
+        "--candidate-count", type=int, default=12,
+        help="Per-tool candidate volume; lower than the interactive default of 24 "
+        "because evaluation turns routinely chain several retrieval tools in one turn.",
     )
     parser.add_argument(
         "--delay", type=float, default=0, help="Seconds between recommendation turns."
@@ -620,6 +644,10 @@ def main():
         parser.error("Turns per session must be between 1 and 8.")
     if args.react_max_output_tokens < 256:
         parser.error("ReAct output allowance must be at least 256 tokens.")
+    if args.max_output_tokens < 256:
+        parser.error("Explanation output allowance must be at least 256 tokens.")
+    if args.candidate_count < 1:
+        parser.error("Candidate count must be at least 1.")
     try:
         run(args)
     except (ValueError, RuntimeError) as exc:

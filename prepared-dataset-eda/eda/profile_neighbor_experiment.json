@@ -1,0 +1,124 @@
+{
+  "protocol": "saved-top30-bpr-neighbors-internal-temporal-profile-ablation-v1",
+  "seed": 42,
+  "users": {
+    "tuning": 1137,
+    "evaluation": 1138
+  },
+  "feature_check": {
+    "preferred_language_unique_values": 1,
+    "preferred_musical_culture_unique_values": 3458,
+    "language_used": false,
+    "neighbor_pairs_with_eligible_history": 60788,
+    "fraction_with_exact_culture_match": 0.03625715601763506,
+    "fraction_with_token_culture_overlap": 0.3995196420346121
+  },
+  "baseline": {
+    "all_users": {
+      "recall@20": 0.03744845630559916,
+      "ndcg@20": 0.02690645133675404,
+      "hit_rate@20": 0.10505494505494506
+    },
+    "tuning": {
+      "recall@20": 0.03920090463626084,
+      "ndcg@20": 0.02534798189544186,
+      "hit_rate@20": 0.10817941952506596
+    },
+    "evaluation": {
+      "recall@20": 0.035697547911959164,
+      "ndcg@20": 0.028463551297010586,
+      "hit_rate@20": 0.10193321616871705
+    }
+  },
+  "tuning_results": {
+    "bpr": {
+      "recall@20": 0.03920090463626084,
+      "ndcg@20": 0.02534798189544186,
+      "hit_rate@20": 0.10817941952506596
+    },
+    "exact_bpr_weight_0": {
+      "recall@20": 0.011192779662436654,
+      "ndcg@20": 0.007086464171329058,
+      "hit_rate@20": 0.02990325417766051
+    },
+    "exact_bpr_weight_0.25": {
+      "recall@20": 0.03906269631863299,
+      "ndcg@20": 0.024217882735496497,
+      "hit_rate@20": 0.10817941952506596
+    },
+    "exact_bpr_weight_0.5": {
+      "recall@20": 0.03931398416886544,
+      "ndcg@20": 0.024291961246716377,
+      "hit_rate@20": 0.10817941952506596
+    },
+    "exact_bpr_weight_0.75": {
+      "recall@20": 0.04034007622398124,
+      "ndcg@20": 0.026358979542491542,
+      "hit_rate@20": 0.11081794195250659
+    },
+    "exact_bpr_weight_0.9": {
+      "recall@20": 0.040606022532143904,
+      "ndcg@20": 0.026115732376260126,
+      "hit_rate@20": 0.11169744942832015
+    },
+    "token_bpr_weight_0": {
+      "recall@20": 0.03440758889307702,
+      "ndcg@20": 0.02149610584833776,
+      "hit_rate@20": 0.09410729991204925
+    },
+    "token_bpr_weight_0.25": {
+      "recall@20": 0.041784981362817775,
+      "ndcg@20": 0.02595793047085015,
+      "hit_rate@20": 0.10993843447669305
+    },
+    "token_bpr_weight_0.5": {
+      "recall@20": 0.04250533986681744,
+      "ndcg@20": 0.02660159168048708,
+      "hit_rate@20": 0.11345646437994723
+    },
+    "token_bpr_weight_0.75": {
+      "recall@20": 0.04239016626879423,
+      "ndcg@20": 0.028415246015263813,
+      "hit_rate@20": 0.1169744942832014
+    },
+    "token_bpr_weight_0.9": {
+      "recall@20": 0.04165305524144574,
+      "ndcg@20": 0.027644036704993748,
+      "hit_rate@20": 0.11521547933157432
+    }
+  },
+  "selected_configuration": "token_bpr_weight_0.75",
+  "selected_evaluation": {
+    "recall@20": 0.03954515022177588,
+    "ndcg@20": 0.029707472495436083,
+    "hit_rate@20": 0.11423550087873462
+  },
+  "selected_vs_baseline": {
+    "recall@20": {
+      "mean_delta": 0.0038476023098167208,
+      "bootstrap_95ci": [
+        -0.0008662858816637377,
+        0.008815434345970357
+      ]
+    },
+    "ndcg@20": {
+      "mean_delta": 0.0012439211984255029,
+      "bootstrap_95ci": [
+        -0.0018657810654643325,
+        0.004439606175066238
+      ]
+    },
+    "hit_rate@20": {
+      "mean_delta": 0.012302284710017574,
+      "bootstrap_95ci": [
+        0.0008787346221441124,
+        0.02374780316344452
+      ]
+    }
+  },
+  "limitations": [
+    "Reweights only the saved top-30 BPR neighbors; cannot discover profile-similar users outside that pool.",
+    "Interaction labels are synthetic goal-progress feedback, not confirmed listens or likes.",
+    "This is internal validation; do not tune on official test targets."
+  ]
+}

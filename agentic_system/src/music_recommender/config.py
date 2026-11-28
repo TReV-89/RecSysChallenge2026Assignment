@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ADAPTER_DIR = PROJECT_ROOT.parent / "prepared-dataset-eda" / "eda"
 
 
 class Settings(BaseModel):
@@ -26,6 +27,9 @@ class Settings(BaseModel):
     candidate_count: int = 24
     neighbor_count: int = 8
     cf_history_mode: Literal["official_test", "internal_validation"] = "official_test"
+    cf_neighbor_similarity: Literal["cosine", "population_centered"] = "cosine"
+    cf_adapter_weights_path: Path | None = None
+    cf_adapter_users_path: Path | None = None
     max_output_tokens: int = 1200
     react_max_output_tokens: int | None = Field(default=None, ge=256)
 
@@ -48,8 +52,38 @@ class Settings(BaseModel):
         )
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(
+        cls, *, cf_history_mode: Literal["official_test", "internal_validation"] | None = None
+    ) -> "Settings":
         load_dotenv(PROJECT_ROOT / ".env")
+
+        def artifact_path(name: str) -> Path | None:
+            value = os.getenv(name)
+            if not value:
+                return None
+            path = Path(value)
+            return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+        mode = cf_history_mode or os.getenv("CF_HISTORY_MODE", "official_test")
+        enabled_value = os.getenv("CF_PROFILE_ADAPTER_ENABLED", "1").strip().lower()
+        if enabled_value not in {"0", "1"}:
+            raise ValueError("CF_PROFILE_ADAPTER_ENABLED must be 0 or 1")
+        weights_override = artifact_path("CF_ADAPTER_WEIGHTS_PATH")
+        users_override = artifact_path("CF_ADAPTER_USERS_PATH")
+        use_adapter = enabled_value == "1" and (
+            os.getenv("TALKPLAY_CATALOG", "catalog") != "sample"
+            or weights_override is not None or users_override is not None
+        )
+        if use_adapter:
+            if weights_override is not None or users_override is not None:
+                weights_path, users_path = weights_override, users_override
+            else:
+                suffix = "official" if mode == "official_test" else "final"
+                weights_path = ADAPTER_DIR / f"culture_adapter_{suffix}_weights.npz"
+                users_path = ADAPTER_DIR / f"culture_adapter_{suffix}_users.npz"
+        else:
+            weights_path = users_path = None
+
         result = cls(
             llm_provider=os.getenv("LLM_PROVIDER") or "groq",
             openrouter_model=os.getenv("OPENROUTER_MODEL")
@@ -62,7 +96,13 @@ class Settings(BaseModel):
             embedding_model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"),
             embedding_device=os.getenv("EMBEDDING_DEVICE", "cpu"),
             embedding_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "8")),
-            cf_history_mode=os.getenv("CF_HISTORY_MODE", "official_test"),
+            cf_history_mode=mode,
+            cf_neighbor_similarity=(
+                os.getenv("CF_NEIGHBOR_SIMILARITY", "population_centered")
+                if use_adapter else "cosine"
+            ),
+            cf_adapter_weights_path=weights_path,
+            cf_adapter_users_path=users_path,
             track_embedding_column=os.getenv(
                 "TRACK_EMBEDDING_COLUMN", "metadata-qwen3_embedding_0.6b"
             ),

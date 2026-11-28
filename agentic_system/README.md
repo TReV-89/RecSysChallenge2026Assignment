@@ -149,14 +149,56 @@ operations to the graph and document the arguments visible to the model.
 
 After `cf_data.py` imports prepared evidence, the graph combines text-to-item
 candidates with user-to-user candidates when the query user has a published
-CF-BPR vector. The query is compared by cosine similarity with the
+CF-BPR vector. Neighbor search compares the query with the
 **full training-vector pool**, excluding itself. Neighbor tracks come only from
 eligible positive training pseudo-interactions. The API returns only a bounded
 neighbor summary; candidate support can use every eligible neighbor.
 Users with no usable CF-BPR vector receive text candidates.
 
-The user-to-item route compares a published 128-dimensional CF-BPR user factor
-against the separate track CF-BPR index using inner product. It excludes
+The full-catalog API and official-test evaluators now load the offline-trained
+musical-culture adapter and use population-centered cosine by default. The
+adapter enhances CF-BPR user factors before neighbor retrieval and direct
+user-to-item retrieval. The supplied profile
+must include `preferred musical culture: ...`; missing or out-of-vocabulary
+culture uses the original user factor, neighbor pool and cosine. The enhanced training-user archive
+is checked against the catalog's original user factors before use. Track
+factors stay unchanged. A user without a CF-BPR factor still has no CF route.
+
+`CF_NEIGHBOR_SIMILARITY=population_centered` uses cosine after subtracting the
+mean enhanced **training-user** vector from the query and each candidate. This
+is population-centered cosine on latent factors, not the rating-based adjusted
+cosine used in classical item-based CF. `cosine` is available as the matched
+comparison setting. In the
+internal offline comparison, centered cosine changed user-to-user NDCG@20 from
+0.03751 to 0.03804 on 1,138 held-out users; the paired 95% interval for the
+difference crossed zero. See `../prepared-dataset-eda/eda/centered_neighbor_experiment.json`.
+
+For official-test runs, the default adapter is the separate model trained only
+from the training split (`train_culture_adapter.py --scope official_test`). The
+default paths resolve to its weights and enhanced-user files under
+`../prepared-dataset-eda/eda/`; `CF_ADAPTER_WEIGHTS_PATH` and
+`CF_ADAPTER_USERS_PATH` override both paths together. Internal-validation mode
+defaults to the pre-holdout adapter. Set `CF_PROFILE_ADAPTER_ENABLED=0` for the
+original-factor, ordinary-cosine baseline. The sample catalog does not load the
+full-catalog adapter by default. Compare the two neighbor
+metrics using the same sample and different output directories:
+
+```powershell
+$env:CF_PROFILE_ADAPTER_ENABLED = "1"
+$env:CF_NEIGHBOR_SIMILARITY = "cosine"
+.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate_retrieval --sources user_to_user user_to_item text --sessions 100 --seed 42 --output data/evaluations/profile-cosine-100
+$env:CF_NEIGHBOR_SIMILARITY = "population_centered"
+.\.venv-stable\Scripts\python.exe -m music_recommender.evaluate_retrieval --sources user_to_user user_to_item text --sessions 100 --seed 42 --output data/evaluations/profile-centered-100
+```
+
+The same environment settings also apply to `music_recommender.evaluate` for
+full-agent runs. Keep each configuration in a separate output directory. For
+the unchanged CF-BPR baseline, set `CF_PROFILE_ADAPTER_ENABLED=0`.
+The matched retrieval-only results and a colleague-facing full-agent checklist
+are in [CF profile evaluation handoff](CF_PROFILE_EVAL_HANDOFF.md).
+
+The user-to-item route compares a 128-dimensional CF-BPR user factor (with the
+optional culture correction) against the separate track CF-BPR index using inner product. It excludes
 explicitly blocked tracks and any known prior positive training tracks. An
 unavailable user factor contributes no candidates; text retrieval still runs.
 
@@ -168,7 +210,7 @@ neighbor path has been removed.
 
 ## Scores and assumptions
 
-The CF path keeps raw cosine and neighbor-support values as evidence but ranks
+The CF path keeps neighbor similarity and support values as evidence but ranks
 the merged candidates by reciprocal source ranks: each available source adds
 `1 / (60 + rank)`. This avoids adding incomparable Qwen similarity and CF
 support and user-to-item inner-product scores. Explicit exclusions are applied before final ranking, and the
